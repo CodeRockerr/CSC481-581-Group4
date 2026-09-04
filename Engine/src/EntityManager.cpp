@@ -6,6 +6,15 @@ Entity *EntityManager::createEntity(float x, float y, float w, float h, SDL_Colo
     return entities.back().get();
 }
 
+void EntityManager::setTexture(Entity *entity, SDL_Texture *texture, int frameCount)
+{
+    if (entity)
+    {
+        entity->texture = texture;
+        entity->spriteFrameCount = frameCount;
+    }
+}
+
 void EntityManager::drawAll(SDL_Renderer *renderer, int windowWidth, int windowHeight) const
 {
     float scaleX = 1.0f;
@@ -16,16 +25,50 @@ void EntityManager::drawAll(SDL_Renderer *renderer, int windowWidth, int windowH
         scaleX = static_cast<float>(windowWidth) / static_cast<float>(referenceWidth);
         scaleY = static_cast<float>(windowHeight) / static_cast<float>(referenceHeight);
     }
-    // In Pixel mode, scaleX/scaleY stay at 1.0 — entities render at their
-    // exact literal size regardless of window size.
 
     for (const auto &e : entities)
     {
         if (!e->active)
             continue;
-        SDL_SetRenderDrawColor(renderer, e->color.r, e->color.g, e->color.b, e->color.a);
-        SDL_FRect rect{e->x * scaleX, e->y * scaleY, e->width * scaleX, e->height * scaleY};
-        SDL_RenderFillRect(renderer, &rect);
+
+        SDL_FRect rect{
+            e->x * scaleX,
+            e->y * scaleY,
+            e->width * scaleX,
+            e->height * scaleY
+        };
+
+        if (e->texture)
+        {
+            float textureWidth = 0.0f;
+            float textureHeight = 0.0f;
+
+            SDL_GetTextureSize(e->texture, &textureWidth, &textureHeight);
+
+            float frameWidth =
+                textureWidth / static_cast<float>(e->spriteFrameCount);
+
+            SDL_FRect source{
+                frameWidth * e->spriteFrame,
+                0.0f,
+                frameWidth,
+                textureHeight
+            };
+
+            SDL_RenderTexture(renderer, e->texture, &source, &rect);
+        }
+        else
+        {
+            SDL_SetRenderDrawColor(
+                renderer,
+                e->color.r,
+                e->color.g,
+                e->color.b,
+                e->color.a
+            );
+
+            SDL_RenderFillRect(renderer, &rect);
+        }
     }
 }
 

@@ -1,4 +1,5 @@
 #include "Engine.h"
+#include <stdexcept>
 
 Engine::Engine(const std::string &title, int width, int height)
     : window(title, width, height), renderer(window), physics(980.0f)
