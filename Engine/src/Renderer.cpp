@@ -18,7 +18,7 @@ Renderer::~Renderer()
 
 void Renderer::clear()
 {
-    SDL_SetRenderDrawColor(renderer, 128, 128, 128, 255);
+    SDL_SetRenderDrawColor(renderer, 0, 90, 180, 255);
     SDL_RenderClear(renderer);
 }
 

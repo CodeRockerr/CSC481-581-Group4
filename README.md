@@ -28,14 +28,15 @@ Reusable game engine built using:
 
 ### Prerequisites
 
-- C++
-- CMake
-- SDL3
-- VS Code (recommended)
+- C++17 compiler (Xcode Command Line Tools on Mac, MSVC on Windows)
+- CMake 3.16+
+- SDL3 is vendored in `vendored/SDL` (do not install a separate copy)
 
 ### Build
 
-[Add your actual build instructions after the initial setup works.]
+```bash
+cmake -S . -B build
+cmake --build build
 
 ## Development
 

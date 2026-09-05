@@ -17,9 +17,9 @@ namespace
 Engine::Engine(const std::string &title, int width, int height)
     : initialized(initializeSDL()), window(title, width, height), renderer(window), physics(980.0f)
 {
-    // Capture whatever size the window actually ended up at (after
-    // auto-detecting the screen) as the reference resolution for Task 6's
-    // percentage scaling mode.
+    // Task 6: whatever size the window actually opened at (1920x1080 by
+    // default, or auto-detected if 0x0 was passed) is the reference
+    // resolution for percentage scaling.
     entities.setReferenceResolution(window.getWidth(), window.getHeight());
 }
 
