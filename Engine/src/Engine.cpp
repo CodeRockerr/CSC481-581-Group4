@@ -1,12 +1,22 @@
 #include "Engine.h"
+#include <stdexcept>
+
+namespace
+{
+    bool initializeSDL()
+    {
+        if (!SDL_Init(SDL_INIT_VIDEO))
+        {
+            throw std::runtime_error(std::string("SDL_Init failed: ") + SDL_GetError());
+        }
+
+        return true;
+    }
+}
 
 Engine::Engine(const std::string &title, int width, int height)
-    : window(title, width, height), renderer(window), physics(980.0f)
+    : initialized(initializeSDL()), window(title, width, height), renderer(window), physics(980.0f)
 {
-    if (!SDL_Init(SDL_INIT_VIDEO))
-    {
-        throw std::runtime_error(std::string("SDL_Init failed: ") + SDL_GetError());
-    }
     // Capture whatever size the window actually ended up at (after
     // auto-detecting the screen) as the reference resolution for Task 6's
     // percentage scaling mode.

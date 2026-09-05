@@ -17,6 +17,8 @@ public:
     Entity *createEntity(float x, float y, float w, float h,
                          SDL_Color color = {255, 255, 255, 255});
 
+    void setTexture(Entity *entity, SDL_Texture *texture, int frameCount = 1);
+
     // windowWidth/windowHeight are the CURRENT window size (may change if
     // resized). Only used when scaleMode == Percentage.
     void drawAll(SDL_Renderer *renderer, int windowWidth, int windowHeight) const;

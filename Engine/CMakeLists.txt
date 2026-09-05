@@ -7,7 +7,9 @@ add_library(engine STATIC
     src/Input.cpp
     src/Collision.cpp
     src/Engine.cpp
+    src/Image.cpp
 )
 
-target_include_directories(engine PUBLIC include)
+target_include_directories(engine PUBLIC include PRIVATE ../vendored/SDL/src/video)
+
 target_link_libraries(engine PUBLIC SDL3::SDL3)

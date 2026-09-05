@@ -26,6 +26,7 @@ public:
     void run(const std::function<void(float)> &gameUpdate);
 
 private:
+    bool initialized;
     Window window;
     Renderer renderer;
     EntityManager entities;
