@@ -15,5 +15,6 @@ public:
 private:
     static const bool *keyboardState;
     static int numKeys;
+    static bool currentState[512];
     static bool previousState[512];
 };

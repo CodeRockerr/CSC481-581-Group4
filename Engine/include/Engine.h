@@ -5,6 +5,7 @@
 #include "EntityManager.h"
 #include "Physics.h"
 #include "Input.h"
+#include "Collision.h"
 // Ties together all Milestone 1 systems and owns the main game loop
 // (Task 1). Individual games call Engine::run() and pass in a callback
 // for their own per-frame game logic (movement, collision responses,
