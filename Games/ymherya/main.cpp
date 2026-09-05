@@ -1,6 +1,6 @@
 #include "Engine.h"
 #include "Collision.h"
-#include <SDL3_image/SDL_image.h>
+#include "Image.h"
 #include <cmath>
 #include <stdexcept>
 
@@ -19,7 +19,7 @@ int main(int argc, char *argv[])
     // --------------------------------
 
     SDL_Surface *backgroundSurface =
-        IMG_Load("Games/ymherya/assets/background.png");
+        loadImage("Games/ymherya/assets/background.png");
 
     if (!backgroundSurface)
     {
@@ -59,7 +59,7 @@ int main(int argc, char *argv[])
     // --------------------------------
 
     SDL_Surface *helloSurface =
-        IMG_Load("Games/ymherya/assets/hello-kitty.png");
+        loadImage("Games/ymherya/assets/hello-kitty.png");
 
     if (!helloSurface)
     {
@@ -86,7 +86,7 @@ int main(int argc, char *argv[])
     // --------------------------------
 
     SDL_Surface *kuromiSurface =
-        IMG_Load("Games/ymherya/assets/kuromi.png");
+        loadImage("Games/ymherya/assets/kuromi.png");
 
     if (!kuromiSurface)
     {
@@ -179,7 +179,7 @@ int main(int argc, char *argv[])
     // --------------------------------
 
     engine.run([&](float deltaTime)
-    {
+               {
         const int currentWidth =
             engine.getWindow().getWidth();
 
@@ -324,8 +324,7 @@ int main(int argc, char *argv[])
             helloKitty->y = kittyGroundY - helloKitty->height;
             helloKitty->velocityY = 0.0f;
             helloKittyGrounded = true;
-        }
-    });
+        } });
 
     // --------------------------------
     // Cleanup

@@ -1,5 +1,3 @@
-find_package(SDL3_image REQUIRED CONFIG)
-
 add_library(engine STATIC
     src/Window.cpp
     src/Renderer.cpp
@@ -9,11 +7,9 @@ add_library(engine STATIC
     src/Input.cpp
     src/Collision.cpp
     src/Engine.cpp
+    src/Image.cpp
 )
 
-target_include_directories(engine PUBLIC include)
+target_include_directories(engine PUBLIC include PRIVATE ../vendored/SDL/src/video)
 
-target_link_libraries(engine PUBLIC
-    SDL3::SDL3
-    SDL3_image::SDL3_image
-)
+target_link_libraries(engine PUBLIC SDL3::SDL3)
