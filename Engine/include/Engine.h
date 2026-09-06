@@ -5,6 +5,7 @@
 #include "EntityManager.h"
 #include "Physics.h"
 #include "Input.h"
+#include "Collision.h"
 // Ties together all Milestone 1 systems and owns the main game loop
 // (Task 1). Individual games call Engine::run() and pass in a callback
 // for their own per-frame game logic (movement, collision responses,
@@ -12,7 +13,7 @@
 class Engine
 {
 public:
-    Engine(const std::string &title, int width = 0, int height = 0);
+    Engine(const std::string &title, int width = 1920, int height = 1080);
 
     EntityManager &getEntities() { return entities; }
     Physics &getPhysics() { return physics; }

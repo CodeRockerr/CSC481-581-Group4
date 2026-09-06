@@ -1,6 +1,9 @@
 #include "Collision.h"
 
-bool Collision::checkCollision(const Entity& a, const Entity& b) {
+bool Collision::checkCollision(const Entity &a, const Entity &b)
+{
+    if (!a.active || !b.active)
+        return false;
     SDL_FRect rectA = a.getBounds();
     SDL_FRect rectB = b.getBounds();
     // SDL3's float-rect intersection test (SDL2 used SDL_HasIntersection

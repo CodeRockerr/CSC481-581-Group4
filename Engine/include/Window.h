@@ -9,7 +9,7 @@
 class Window
 {
 public:
-    Window(const std::string &title, int width = 0, int height = 0);
+    Window(const std::string &title, int width = 1920, int height = 1080);
     ~Window();
 
     SDL_Window *getHandle() const { return window; }
