@@ -55,7 +55,10 @@ void EntityManager::drawAll(SDL_Renderer *renderer, int windowWidth, int windowH
                 textureHeight
             };
 
-            SDL_RenderTexture(renderer, e->texture, &source, &rect);
+            const SDL_FlipMode flip =
+                e->flipHorizontal ? SDL_FLIP_HORIZONTAL : SDL_FLIP_NONE;
+            SDL_RenderTextureRotated(
+                renderer, e->texture, &source, &rect, 0.0, nullptr, flip);
         }
         else
         {

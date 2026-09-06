@@ -224,11 +224,13 @@ int main(int argc, char *agv[])
         if (Input::isKeyPressed(SDL_SCANCODE_A) || Input::isKeyPressed(SDL_SCANCODE_LEFT))
         {
             diver->velocityX = -moveSpeed;
+            diver->flipHorizontal = true;
             moving = true;
         }
         if (Input::isKeyPressed(SDL_SCANCODE_D) || Input::isKeyPressed(SDL_SCANCODE_RIGHT))
         {
             diver->velocityX = moveSpeed;
+            diver->flipHorizontal = false;
             moving = true;
         }
         if ((Input::isKeyJustPressed(SDL_SCANCODE_W) ||
@@ -266,6 +268,7 @@ int main(int argc, char *agv[])
             fish->x = fishMinX;
             fishDir = 1;
         }
+        fish->flipHorizontal = (fishDir < 0);
         fishAnim += deltaTime;
         fish->spriteFrame = static_cast<int>(fishAnim * 8.0f) % 4;
 
