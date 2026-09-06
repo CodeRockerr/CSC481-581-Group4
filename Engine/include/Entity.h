@@ -21,6 +21,7 @@ public:
     SDL_Texture *texture = nullptr;
     int spriteFrame = 0;
     int spriteFrameCount = 1;
+    bool flipHorizontal = false;
 
     SDL_FRect getBounds() const;
 };
