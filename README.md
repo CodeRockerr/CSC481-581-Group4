@@ -66,21 +66,6 @@ Run from the repository root so asset paths resolve:
 
 On Windows the executables are under `build/Debug/` or `build/Release/`.
 
-## Lost Under the Sea (`ashah_game`)
-
-Deep-sea platformer using the shared engine.
-
-| Control | Action |
-|---|---|
-| A / D or arrows | Walk |
-| W, Up, or Space | Jump |
-| Tab or T | Toggle Pixel vs Percentage scaling (window shrinks/grows) |
-
-- **Static:** vent shelf  
-- **Player:** diver (gravity on)  
-- **Patrol:** anglerfish (no gravity)  
-- Land on the shelf, walk off either end to fall, hit the fish to drop in from the top  
-
 ## Development
 
 Team engine design documentation belongs in `Docs/` before the team submission.
