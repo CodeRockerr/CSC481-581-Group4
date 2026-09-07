@@ -14,10 +14,6 @@ int main(int argc, char *argv[])
     const int width = engine.getWindow().getWidth();
     const int height = engine.getWindow().getHeight();
 
-    // --------------------------------
-    // Load Background
-    // --------------------------------
-
     SDL_Surface *backgroundSurface =
         loadImage("Games/ymherya/assets/background.png");
 
@@ -41,11 +37,6 @@ int main(int argc, char *argv[])
             SDL_GetError());
     }
 
-    // --------------------------------
-    // STATIC ENTITY
-    // Background
-    // --------------------------------
-
     Entity *background = entities.createEntity(
         0.0f,
         0.0f,
@@ -53,10 +44,6 @@ int main(int argc, char *argv[])
         static_cast<float>(height));
 
     entities.setTexture(background, backgroundTexture, 1);
-
-    // --------------------------------
-    // Load Hello Kitty
-    // --------------------------------
 
     SDL_Surface *helloSurface =
         loadImage("Games/ymherya/assets/hello-kitty.png");
@@ -81,10 +68,6 @@ int main(int argc, char *argv[])
             SDL_GetError());
     }
 
-    // --------------------------------
-    // Load Kuromi
-    // --------------------------------
-
     SDL_Surface *kuromiSurface =
         loadImage("Games/ymherya/assets/kuromi.png");
 
@@ -108,16 +91,8 @@ int main(int argc, char *argv[])
             SDL_GetError());
     }
 
-    // --------------------------------
-    // GROUND & PHYSICS CONSTANTS
-    // --------------------------------
-
     const float groundY = height * 0.86f;
     const float gravity = 1500.0f;
-
-    // --------------------------------
-    // MATCHING CHARACTER SIZES
-    // --------------------------------
 
     const float kittyHeight = height * 0.18f;
     const float kittyWidth = kittyHeight * 0.60f;
@@ -125,10 +100,6 @@ int main(int argc, char *argv[])
 
     const float kuromiHeight = height * 0.25f;
     const float kuromiWidth = kuromiHeight * 0.45f;
-
-    // --------------------------------
-    // HELLO KITTY (Player Character)
-    // --------------------------------
 
     Entity *helloKitty = entities.createEntity(
         width * 0.55f,
@@ -143,10 +114,6 @@ int main(int argc, char *argv[])
 
     helloKitty->affectedByGravity = false;
     bool helloKittyGrounded = true;
-
-    // --------------------------------
-    // KUROMI (Patrolling Character)
-    // --------------------------------
 
     Entity *kuromi = entities.createEntity(
         width * 0.15f,
@@ -167,16 +134,8 @@ int main(int argc, char *argv[])
     float kuromiSpeed = 150.0f;
     int kuromiDirection = 1; // 1 = moving right, -1 = moving left
 
-    // --------------------------------
-    // ANIMATION
-    // --------------------------------
-
     float helloKittyAnimationTime = 0.0f;
     float kuromiAnimationTime = 0.0f;
-
-    // --------------------------------
-    // GAME LOOP
-    // --------------------------------
 
     engine.run([&](float deltaTime)
                {
@@ -189,16 +148,9 @@ int main(int argc, char *argv[])
         const float currentGroundY =
             currentHeight * 0.86f;
 
-        // ==================================
-        // BACKGROUND
-        // ==================================
-
         background->width = static_cast<float>(currentWidth);
         background->height = static_cast<float>(currentHeight);
 
-        // ==================================
-        // HELLO KITTY MOVEMENT & INPUT
-        // ==================================
 
         const float kittySpeed = 350.0f;
         bool kittyMoving = false;
@@ -222,9 +174,6 @@ int main(int argc, char *argv[])
             helloKittyGrounded = false;
         }
 
-        // ==================================
-        // GRAVITY & JUMP UPDATE
-        // ==================================
 
         if (!helloKittyGrounded)
         {
@@ -232,9 +181,6 @@ int main(int argc, char *argv[])
             helloKitty->y += helloKitty->velocityY * deltaTime;
         }
 
-        // ==================================
-        // HELLO KITTY ANIMATION
-        // ==================================
 
         if (kittyMoving && helloKittyGrounded)
         {
@@ -252,9 +198,6 @@ int main(int argc, char *argv[])
             helloKitty->spriteFrame = 0;
         }
 
-        // ==================================
-        // HELLO KITTY GROUND COLLISION
-        // ==================================
 
         float kittyGroundY = currentGroundY - kittyGroundOffset;
         float kittyBottom = helloKitty->y + helloKitty->height;
@@ -266,9 +209,6 @@ int main(int argc, char *argv[])
             helloKittyGrounded = true;
         }
 
-        // ==================================
-        // HELLO KITTY SCREEN BOUNDS
-        // ==================================
 
         if (helloKitty->x < 0.0f)
         {
@@ -280,9 +220,6 @@ int main(int argc, char *argv[])
             helloKitty->x = currentWidth - helloKitty->width;
         }
 
-        // ==================================
-        // KUROMI PATROL LOGIC
-        // ==================================
 
         kuromi->x += kuromiSpeed * kuromiDirection * deltaTime;
         kuromi->y = currentGroundY - kuromi->height; // Kept at exact same ground level
@@ -299,13 +236,9 @@ int main(int argc, char *argv[])
             kuromiDirection = 1;
         }
 
-        // Kuromi walking animation
         kuromiAnimationTime += deltaTime;
         kuromi->spriteFrame = static_cast<int>(kuromiAnimationTime * 10.0f) % 8;
 
-        // ==================================
-        // HELLO KITTY / KUROMI COLLISION
-        // ==================================
 
         if (Collision::checkCollision(*helloKitty, *kuromi))
         {
@@ -314,9 +247,6 @@ int main(int argc, char *argv[])
             helloKittyGrounded = true;
         }
 
-        // ==================================
-        // HELLO KITTY FALL RESET
-        // ==================================
 
         if (helloKitty->y > currentHeight)
         {

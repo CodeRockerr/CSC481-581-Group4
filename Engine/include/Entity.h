@@ -17,7 +17,6 @@ public:
     bool affectedByGravity = false;
     bool active = true;
 
-    // Sprite information
     SDL_Texture *texture = nullptr;
     int spriteFrame = 0;
     int spriteFrameCount = 1;

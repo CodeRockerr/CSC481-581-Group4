@@ -5,9 +5,6 @@
 #include <stdexcept>
 #include <string>
 
-// Gemini/ChatGPT "magenta" is never exact #FF00FF (measured ~248,4,248
-// with lots of nearby pinks). Walk the pixels and punch those out to
-// alpha=0 so SDL_RenderTexture can blend them away.
 static bool isChromaMagenta(Uint8 r, Uint8 g, Uint8 b)
 {
     return r >= 160 && b >= 160 && g <= 90 && (r - g) > 70 && (b - g) > 70;
@@ -56,9 +53,6 @@ static SDL_Texture *loadTexture(SDL_Renderer *renderer, const char *path, bool c
     return texture;
 }
 
-// Sprite sheets include magenta padding, so the draw rect is much larger
-// than the visible body. Copy the entity with insets and let the engine
-// AABB test those tighter boxes.
 static Entity bodyHitbox(const Entity &e, float padL, float padR, float padT, float padB)
 {
     Entity box = e;
@@ -77,9 +71,6 @@ int main(int argc, char *agv[])
 
     engine.getPhysics().setGravity(1600.0f);
 
-    // SDL may not actually open at 1920x1080 on a Mac laptop. Read the
-    // real window size and use THAT as layout + Task 6 reference, so the
-    // shelf/diver/fish sit inside the visible ocean instead of the blue void.
     int width = 0;
     int height = 0;
     SDL_GetWindowSize(engine.getWindow().getHandle(), &width, &height);
@@ -98,7 +89,6 @@ int main(int argc, char *agv[])
     entities.setTexture(background, backgroundTex, 1);
     background->affectedByGravity = false;
 
-    // Leave water on both ends so walking off the ledge is obvious.
     const float shelfPadTop = 0.20f;
     const float diverPadBottom = 0.10f;
 
@@ -113,8 +103,6 @@ int main(int argc, char *agv[])
     const float walkLeft = shelfX + shelfWidth * 0.08f;
     const float walkRight = shelfX + shelfWidth * 0.92f;
 
-    // Size from one animation frame, then widen slightly so the profile
-    // sprites are not stretched into a tall skinny box.
     float diverTexW = 0.0f;
     float diverTexH = 0.0f;
     SDL_GetTextureSize(diverTex, &diverTexW, &diverTexH);

@@ -6,10 +6,6 @@
 #include "Physics.h"
 #include "Input.h"
 #include "Collision.h"
-// Ties together all Milestone 1 systems and owns the main game loop
-// (Task 1). Individual games call Engine::run() and pass in a callback
-// for their own per-frame game logic (movement, collision responses,
-// etc.) so that game-specific code never has to touch SDL directly.
 class Engine
 {
 public:
@@ -20,10 +16,6 @@ public:
     Renderer &getRenderer() { return renderer; }
     Window &getWindow() { return window; }
 
-    // gameUpdate is called once per frame with deltaTime (seconds),
-    // AFTER input/physics have been updated but BEFORE rendering.
-    // This is where individual games put their own logic (Tasks 2-5
-    // of the Individual Game Requirements).
     void run(const std::function<void(float)> &gameUpdate);
 
 private:
