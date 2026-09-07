@@ -20,6 +20,6 @@ add_subdirectory(Engine)
 # Each teammate gets their own subfolder under Games/ with its own
 # CMakeLists.txt, so everyone's individual game builds as a separate
 # executable against the shared Engine library.
-add_subdirectory(Games/saisumedh)
+add_subdirectory(Games/skaveti)
 add_subdirectory(Games/ymherya)
 add_subdirectory(Games/ashah)
