@@ -24,9 +24,6 @@ Window::Window(const std::string &title, int width, int height)
     }
     else if (haveBounds)
     {
-        // A 1920x1080 request on a laptop is larger than the screen.
-        // Cocoa then marks the window zoomed, and SDL_SetWindowSize is
-        // ignored — which is why Tab appeared to do nothing.
         const int maxW = bounds.w - 40;
         const int maxH = bounds.h - 80;
         if (maxW > 0 && maxH > 0 && (this->width > maxW || this->height > maxH))
@@ -54,7 +51,6 @@ Window::~Window()
 
 void Window::resizeWindow(int w, int h)
 {
-    // Cocoa refuses SDL_SetWindowSize while the window is zoomed/maximized.
     SDL_SetWindowFullscreen(window, false);
     SDL_RestoreWindow(window);
     SDL_SyncWindow(window);

@@ -2,7 +2,6 @@
 #include <SDL3/SDL.h>
 #include "Window.h"
 
-// Task 1 (part 2): Core Graphics Setup — renderer, clear, present.
 class Renderer
 {
 public:
