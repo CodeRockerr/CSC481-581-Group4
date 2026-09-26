@@ -21,6 +21,7 @@ public:
     void drawAll(SDL_Renderer *renderer, int windowWidth, int windowHeight) const;
 
     void updateAll(float deltaTime);
+    void updateAll(const std::vector<float> &timelineDeltas);
 
     void setReferenceResolution(int w, int h)
     {

@@ -8,6 +8,7 @@ add_library(engine STATIC
     src/Collision.cpp
     src/Engine.cpp
     src/Image.cpp
+    src/Timeline.cpp
 )
 
 target_include_directories(engine PUBLIC include PRIVATE ../vendored/SDL/src/video)

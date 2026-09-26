@@ -85,3 +85,17 @@ void EntityManager::updateAll(float deltaTime)
         e->y += e->velocityY * deltaTime;
     }
 }
+
+void EntityManager::updateAll(const std::vector<float> &timelineDeltas)
+{
+    for (auto &e : entities)
+    {
+        if (!e->active)
+            continue;
+        if (e->timelineId < 0 || e->timelineId >= static_cast<int>(timelineDeltas.size()))
+            continue;
+        float deltaTime = timelineDeltas[e->timelineId];
+        e->x += e->velocityX * deltaTime;
+        e->y += e->velocityY * deltaTime;
+    }
+}

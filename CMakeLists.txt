@@ -16,6 +16,7 @@ target_link_libraries(hello PRIVATE SDL3::SDL3)
 
 # --- Milestone 1 additions ---
 add_subdirectory(Engine)
+add_subdirectory(Demo)
 
 # Each teammate gets their own subfolder under Games/ with its own
 # CMakeLists.txt, so everyone's individual game builds as a separate

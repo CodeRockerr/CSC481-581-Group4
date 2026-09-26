@@ -17,6 +17,8 @@ public:
     bool affectedByGravity = false;
     bool active = true;
 
+    int timelineId = 0;
+
     SDL_Texture *texture = nullptr;
     int spriteFrame = 0;
     int spriteFrameCount = 1;
