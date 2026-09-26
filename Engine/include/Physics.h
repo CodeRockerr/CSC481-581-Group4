@@ -1,4 +1,5 @@
 #pragma once
+#include <vector>
 #include "Entity.h"
 #include "EntityManager.h"
 
@@ -11,6 +12,7 @@ public:
     float getGravity() const { return gravity; }
 
     void update(EntityManager &entities, float deltaTime);
+    void update(EntityManager &entities, const std::vector<float> &timelineDeltas);
 
 private:
     float gravity;
