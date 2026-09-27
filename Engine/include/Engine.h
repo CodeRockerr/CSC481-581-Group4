@@ -10,6 +10,7 @@
 #include "Input.h"
 #include "Collision.h"
 #include "Timeline.h"
+#include "FrameWorker.h"
 class Engine
 {
 public:
@@ -28,7 +29,11 @@ public:
     Timeline &getTimeline(int id) { return *timelines[id]; }
     int createTimeline(int64_t ticSize = DefaultTicSize, double scale = 1.0, int anchorId = -1);
 
-    void run(const std::function<void(float)> &gameUpdate);
+    void run(const std::function<void(float)> &gameUpdate,
+             const std::function<void(float)> &worldUpdate = nullptr);
+
+    uint64_t getPlayerFramesBuilt() const { return playerWorker ? playerWorker->getFramesBuilt() : 0; }
+    uint64_t getWorldFramesBuilt() const { return worldWorker ? worldWorker->getFramesBuilt() : 0; }
 
 private:
     bool initialized;
@@ -40,6 +45,13 @@ private:
     std::vector<std::unique_ptr<Timeline>> timelines;
     bool running = true;
 
+    std::function<void(float)> worldCallback;
+    std::vector<Entity> finishedFrame;
+    std::unique_ptr<FrameWorker> playerWorker;
+    std::unique_ptr<FrameWorker> worldWorker;
+
     void handleTimeKeys();
     std::vector<float> stepTimelines();
+    void buildPlayerFrame();
+    void buildWorldFrame();
 };

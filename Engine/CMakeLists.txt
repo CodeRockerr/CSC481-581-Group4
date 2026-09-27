@@ -9,6 +9,7 @@ add_library(engine STATIC
     src/Engine.cpp
     src/Image.cpp
     src/Timeline.cpp
+    src/FrameWorker.cpp
     src/NetworkClient.cpp
 )
 

@@ -16,3 +16,11 @@ void Physics::update(EntityManager& entities, const std::vector<float>& timeline
         e->velocityY += gravity * timelineDeltas[e->timelineId];
     }
 }
+
+void Physics::updateTimeline(EntityManager& entities, int timelineId, float deltaTime) {
+    for (const auto& e : entities.getEntities()) {
+        if (!e->active || !e->affectedByGravity || e->timelineId != timelineId) continue;
+        std::lock_guard<std::mutex> lock(e->stateMutex.get());
+        e->velocityY += gravity * deltaTime;
+    }
+}

@@ -19,9 +19,12 @@ public:
     void setTexture(Entity *entity, SDL_Texture *texture, int frameCount = 1);
 
     void drawAll(SDL_Renderer *renderer, int windowWidth, int windowHeight) const;
+    void drawSnapshot(const std::vector<Entity> &snapshot, SDL_Renderer *renderer, int windowWidth, int windowHeight) const;
+    void copySnapshot(std::vector<Entity> &snapshot) const;
 
     void updateAll(float deltaTime);
     void updateAll(const std::vector<float> &timelineDeltas);
+    void updateTimeline(int timelineId, float deltaTime);
 
     void setReferenceResolution(int w, int h)
     {
@@ -38,6 +41,8 @@ public:
     const std::vector<std::unique_ptr<Entity>> &getEntities() const { return entities; }
 
 private:
+    void drawEntity(const Entity &e, SDL_Renderer *renderer, float scaleX, float scaleY) const;
+
     std::vector<std::unique_ptr<Entity>> entities;
     ScaleMode scaleMode = ScaleMode::Pixel;
     int referenceWidth = 1280;
