@@ -9,8 +9,9 @@ add_library(engine STATIC
     src/Engine.cpp
     src/Image.cpp
     src/Timeline.cpp
+    src/NetworkClient.cpp
 )
 
 target_include_directories(engine PUBLIC include PRIVATE ../vendored/SDL/src/video)
 
-target_link_libraries(engine PUBLIC SDL3::SDL3)
+target_link_libraries(engine PUBLIC SDL3::SDL3 libzmq)
