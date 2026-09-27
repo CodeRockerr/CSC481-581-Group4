@@ -1,6 +1,5 @@
 #include "Server.h"
 
-#include <chrono>
 #include <cmath>
 #include <iostream>
 #include <stdexcept>
@@ -10,15 +9,33 @@ namespace
 {
     constexpr uint16_t CLIENT_PORT_BASE = 6000;
 
-    constexpr float PLATFORM_CENTER_X = 960.0f;
-    constexpr float PLATFORM_Y = 700.0f;
-    constexpr float PLATFORM_AMPLITUDE = 300.0f;
+    constexpr float PLATFORM_CENTER_X = 520.0f;
+    constexpr float PLATFORM_Y = 520.0f;
+    constexpr float PLATFORM_AMPLITUDE = 180.0f;
+    bool sendAll(void *socket, const NetMessage &message, int flags)
+    {
+        return zmq_send(socket, &message, sizeof(NetMessage), flags) != -1;
+    }
+}
 
-    constexpr double PLATFORM_SPEED = 0.000001;
+Server::SdlClock::SdlClock()
+{
+    if (!SDL_Init(SDL_INIT_EVENTS))
+    {
+        throw std::runtime_error(SDL_GetError());
+    }
+}
+
+Server::SdlClock::~SdlClock()
+{
+    SDL_Quit();
 }
 
 Server::Server(uint16_t serverPort)
-    : port(serverPort),
+    : sdlClock(),
+      globalTimeline(),
+      worldTimeline(&globalTimeline, 1'000'000, 1.0),
+      port(serverPort),
       context(zmq_ctx_new()),
       running(false)
 {
@@ -64,40 +81,26 @@ void Server::updatePlayer(const NetMessage &message)
     players[message.clientId].message = message;
 }
 
-NetMessage Server::createPlatformState() const
+NetMessage Server::createPlatformState()
 {
-    using Clock = std::chrono::steady_clock;
-
-    static const auto startTime = Clock::now();
-
-    auto elapsed =
-        std::chrono::duration_cast<
-            std::chrono::microseconds>(
-            Clock::now() - startTime);
-
-    int64_t tic = elapsed.count();
-
-    double time =
-        static_cast<double>(tic) * PLATFORM_SPEED;
+    const double seconds = worldTimeline.getSeconds();
 
     NetMessage platform{};
 
     platform.type = NetMessageType::PlatformState;
     platform.clientId = 0;
-    platform.tic = tic;
+    platform.tic = worldTimeline.getTime();
 
     platform.x =
         PLATFORM_CENTER_X +
         PLATFORM_AMPLITUDE *
-            static_cast<float>(std::sin(time));
+            static_cast<float>(std::sin(seconds));
 
     platform.y = PLATFORM_Y;
 
     platform.velocityX =
         PLATFORM_AMPLITUDE *
-        static_cast<float>(
-            std::cos(time)) *
-        static_cast<float>(PLATFORM_SPEED);
+        static_cast<float>(std::cos(seconds));
 
     platform.velocityY = 0.0f;
 
@@ -120,142 +123,68 @@ std::vector<NetMessage> Server::buildSnapshot()
     return snapshot;
 }
 
+void Server::sendHandshakeReply(void *socket, const NetMessage &response)
+{
+    sendAll(socket, response, 0);
+}
+
 void Server::clientLoop(
     uint32_t clientId,
-    uint16_t clientPort)
+    void *socket)
 {
-    void *socket = zmq_socket(context, ZMQ_REP);
-
-    if (socket == nullptr)
-    {
-        std::cerr
-            << "Failed to create socket for client "
-            << clientId << '\n';
-
-        return;
-    }
-
-    std::string endpoint =
-        "tcp://*:" +
-        std::to_string(clientPort);
-
-    if (zmq_bind(socket, endpoint.c_str()) != 0)
-    {
-        std::cerr
-            << "Failed to bind client "
-            << clientId
-            << " to port "
-            << clientPort << '\n';
-
-        zmq_close(socket);
-        return;
-    }
-
-    std::cout
-        << "Client "
-        << clientId
-        << " connected on port "
-        << clientPort
-        << '\n';
-
+    int linger = 0;
+    zmq_setsockopt(socket, ZMQ_LINGER, &linger, sizeof(linger));
+    std::cout << "Client " << clientId << " connected\n";
     while (running)
     {
         NetMessage message{};
-
-        int received = zmq_recv(
-            socket,
-            &message,
-            sizeof(NetMessage),
-            0);
-
+        const int received = zmq_recv(socket, &message, sizeof(NetMessage), 0);
         if (received == -1)
         {
             break;
         }
-
         if (received != sizeof(NetMessage))
         {
-            std::cerr
-                << "Invalid message size from client "
-                << clientId << '\n';
-
+            NetMessage error{};
+            error.type = NetMessageType::Leave;
+            error.clientId = clientId;
+            sendAll(socket, error, 0);
             break;
         }
-
         message.clientId = clientId;
-
         if (message.type == NetMessageType::Leave)
         {
             {
-                std::lock_guard<std::mutex> lock(
-                    stateMutex);
-
+                std::lock_guard<std::mutex> lock(stateMutex);
                 players.erase(clientId);
             }
-
             NetMessage response{};
             response.type = NetMessageType::Leave;
             response.clientId = clientId;
-
-            zmq_send(
-                socket,
-                &response,
-                sizeof(NetMessage),
-                0);
-
+            sendAll(socket, response, 0);
             break;
         }
 
-        if (message.type ==
-            NetMessageType::PlayerState)
+        if (message.type == NetMessageType::PlayerState)
         {
-            std::cout
-                << "Server received Player "
-                << message.clientId
-                << ": x="
-                << message.x
-                << " y="
-                << message.y
-                << '\n';
-
             updatePlayer(message);
         }
-
-        std::vector<NetMessage> snapshot =
-            buildSnapshot();
-
-        for (size_t i = 0;
-             i < snapshot.size();
-             ++i)
+        const std::vector<NetMessage> snapshot = buildSnapshot();
+        for (size_t i = 0; i < snapshot.size(); ++i)
         {
-            int flags =
-                (i + 1 < snapshot.size())
-                    ? ZMQ_SNDMORE
-                    : 0;
-
-            if (zmq_send(
-                    socket,
-                    &snapshot[i],
-                    sizeof(NetMessage),
-                    flags) == -1)
+            const int flags = (i + 1 < snapshot.size()) ? ZMQ_SNDMORE : 0;
+            if (!sendAll(socket, snapshot[i], flags))
             {
                 break;
             }
         }
     }
-
     zmq_close(socket);
-
     {
         std::lock_guard<std::mutex> lock(stateMutex);
-
         players.erase(clientId);
     }
-
-    std::cout
-        << "Client "
-        << clientId
-        << " disconnected\n";
+    std::cout << "Client " << clientId << " disconnected\n";
 }
 
 void Server::run()
@@ -304,73 +233,46 @@ void Server::run()
             break;
         }
 
-        if (received != sizeof(NetMessage))
+        auto reject = [&]()
         {
-            std::cerr
-                << "Invalid handshake message\n";
+            NetMessage response{};
+            response.type = NetMessageType::Leave;
+            sendHandshakeReply(socket, response);
+        };
 
+        if (received != sizeof(NetMessage) || request.type != NetMessageType::Join)
+        {
+            std::cerr << "Expected Join message\n";
+            reject();
             continue;
         }
 
-        if (request.type !=
-            NetMessageType::Join)
-        {
-            std::cerr
-                << "Expected Join message\n";
+        const uint32_t clientId = nextClientId++;
+        const uint16_t clientPort = static_cast<uint16_t>(CLIENT_PORT_BASE + clientId);
 
+        void *clientSocket = zmq_socket(context, ZMQ_REP);
+        const std::string clientEndpoint = "tcp://*:" + std::to_string(clientPort);
+
+        if (clientSocket == nullptr || zmq_bind(clientSocket, clientEndpoint.c_str()) != 0)
+        {
+            std::cerr << "Failed to bind client " << clientId << '\n';
+            if (clientSocket != nullptr)
+            {
+                zmq_close(clientSocket);
+            }
+            reject();
             continue;
-        }
-
-        uint32_t clientId =
-            nextClientId++;
-
-        uint16_t clientPort =
-            CLIENT_PORT_BASE +
-            static_cast<uint16_t>(clientId);
-
-        {
-            std::lock_guard<std::mutex> lock(
-                stateMutex);
-
-            PlayerState player;
-
-            player.message.type =
-                NetMessageType::PlayerState;
-
-            player.message.clientId =
-                clientId;
-
-            player.message.tic = 0;
-
-            players[clientId] = player;
         }
 
         NetMessage response{};
-
-        response.type =
-            NetMessageType::Join;
-
-        response.clientId =
-            clientId;
-
-        response.tic =
-            clientPort;
-
-        zmq_send(
-            socket,
-            &response,
-            sizeof(NetMessage),
-            0);
+        response.type = NetMessageType::Join;
+        response.clientId = clientId;
+        response.tic = clientPort;
+        sendHandshakeReply(socket, response);
 
         {
-            std::lock_guard<std::mutex> lock(
-                threadMutex);
-
-            clientThreads.emplace_back(
-                &Server::clientLoop,
-                this,
-                clientId,
-                clientPort);
+            std::lock_guard<std::mutex> lock(threadMutex);
+            clientThreads.emplace_back(&Server::clientLoop, this, clientId, clientSocket);
         }
     }
 

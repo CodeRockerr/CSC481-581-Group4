@@ -8,7 +8,7 @@ int main()
     {
         Server server(5555);
 
-        std::cout << "Starting Coffee Maker server...\n";
+        std::cout << "Starting Group 4 game server...\n";
         server.run();
     }
     catch (const std::exception &e)

@@ -10,6 +10,7 @@
 #include <zmq.h>
 
 #include "NetMessage.h"
+#include "Timeline.h"
 
 class Server
 {
@@ -29,13 +30,25 @@ private:
         NetMessage message{};
     };
 
-    void clientLoop(uint32_t clientId, uint16_t clientPort);
+    struct SdlClock
+    {
+        SdlClock();
+        ~SdlClock();
+    };
+
+    void clientLoop(uint32_t clientId, void *socket);
 
     void updatePlayer(const NetMessage &message);
 
     std::vector<NetMessage> buildSnapshot();
 
-    NetMessage createPlatformState() const;
+    NetMessage createPlatformState();
+
+    void sendHandshakeReply(void *socket, const NetMessage &response);
+
+    SdlClock sdlClock;
+    Timeline globalTimeline;
+    Timeline worldTimeline;
 
     uint16_t port;
 

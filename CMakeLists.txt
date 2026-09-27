@@ -50,7 +50,7 @@ target_include_directories(engine_server PRIVATE
 )
 
 target_link_libraries(engine_server PRIVATE
-    libzmq
+    engine
 )
 
 add_executable(network_test

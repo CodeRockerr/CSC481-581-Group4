@@ -3,6 +3,7 @@
 #include <atomic>
 #include <cstdint>
 #include <mutex>
+#include <string>
 #include <thread>
 #include <vector>
 
@@ -23,13 +24,14 @@ public:
     void disconnect();
 
     void sendPlayerState(const NetMessage &message);
-
     std::vector<NetMessage> getLatestMessages();
-
     uint32_t getClientId() const;
 
 private:
     void receiveLoop();
+    bool reconnect();
+    bool readSnapshot(std::vector<NetMessage> &snapshot);
+    void sendLeave();
 
     const char *serverAddress;
     uint16_t serverPort;
@@ -38,6 +40,7 @@ private:
     void *socket;
 
     std::atomic<bool> running;
+    std::atomic<bool> leaveRequested;
     std::thread networkThread;
 
     std::mutex messageMutex;
@@ -48,5 +51,5 @@ private:
     bool hasOutgoingPlayerState = false;
 
     uint32_t clientId = 0;
-    uint16_t clientPort = 0;
+    std::string clientEndpoint;
 };
