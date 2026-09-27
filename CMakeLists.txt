@@ -7,6 +7,8 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 include(FetchContent)
 
+set(CMAKE_POLICY_VERSION_MINIMUM 3.5)
+
 FetchContent_Declare(
     libzmq
     GIT_REPOSITORY https://github.com/zeromq/libzmq.git
@@ -37,3 +39,29 @@ add_subdirectory(Demo)
 add_subdirectory(Games/skaveti)
 add_subdirectory(Games/ymherya)
 add_subdirectory(Games/ashah)
+
+add_executable(engine_server
+    ServerMain.cpp
+    Engine/src/Server.cpp
+)
+
+target_include_directories(engine_server PRIVATE
+    Engine/include
+)
+
+target_link_libraries(engine_server PRIVATE
+    libzmq
+)
+
+add_executable(network_test
+    NetworkTest.cpp
+)
+
+target_include_directories(network_test PRIVATE
+    Engine/include
+)
+
+target_link_libraries(network_test PRIVATE
+    engine
+    libzmq
+)
