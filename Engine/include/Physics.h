@@ -13,6 +13,7 @@ public:
 
     void update(EntityManager &entities, float deltaTime);
     void update(EntityManager &entities, const std::vector<float> &timelineDeltas);
+    void updateTimeline(EntityManager &entities, int timelineId, float deltaTime);
 
 private:
     float gravity;

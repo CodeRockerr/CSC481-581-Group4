@@ -1,5 +1,19 @@
 #pragma once
 #include <SDL3/SDL.h>
+#include <mutex>
+
+class EntityMutex
+{
+public:
+    EntityMutex() = default;
+    EntityMutex(const EntityMutex &) {}
+    EntityMutex &operator=(const EntityMutex &) { return *this; }
+
+    std::mutex &get() const { return mutex; }
+
+private:
+    mutable std::mutex mutex;
+};
 
 class Entity
 {
@@ -18,6 +32,7 @@ public:
     bool active = true;
 
     int timelineId = 0;
+    EntityMutex stateMutex;
 
     SDL_Texture *texture = nullptr;
     int spriteFrame = 0;

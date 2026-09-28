@@ -59,9 +59,39 @@ std::vector<float> Engine::stepTimelines()
     return deltas;
 }
 
-void Engine::run(const std::function<void(float)> &gameUpdate)
+void Engine::buildPlayerFrame()
 {
+    float deltaTime = static_cast<float>(timelines[PlayerTime]->step());
+    physics.updateTimeline(entities, PlayerTime, deltaTime);
+    entities.updateTimeline(PlayerTime, deltaTime);
+}
+
+void Engine::buildWorldFrame()
+{
+    for (int id = 0; id < static_cast<int>(timelines.size()); ++id)
+    {
+        if (id == PlayerTime)
+            continue;
+        float deltaTime = static_cast<float>(timelines[id]->step());
+        physics.updateTimeline(entities, id, deltaTime);
+        entities.updateTimeline(id, deltaTime);
+    }
+
+    if (worldCallback)
+        worldCallback(static_cast<float>(timelines[WorldTime]->getLastDelta()));
+}
+
+void Engine::run(const std::function<void(float)> &gameUpdate,
+                 const std::function<void(float)> &worldUpdate)
+{
+    worldCallback = worldUpdate;
     stepTimelines();
+    entities.copySnapshot(finishedFrame);
+
+    playerWorker = std::make_unique<FrameWorker>([this]
+                                                 { buildPlayerFrame(); });
+    worldWorker = std::make_unique<FrameWorker>([this]
+                                                { buildWorldFrame(); });
 
     while (running)
     {
@@ -80,17 +110,21 @@ void Engine::run(const std::function<void(float)> &gameUpdate)
 
         Input::update();
         handleTimeKeys();
-
-        std::vector<float> deltas = stepTimelines();
-        physics.update(entities, deltas);
+        globalTimeline.step();
 
         if (gameUpdate)
-            gameUpdate(deltas[WorldTime]);
+            gameUpdate(static_cast<float>(timelines[WorldTime]->getLastDelta()));
 
-        entities.updateAll(deltas);
+        playerWorker->start();
+        worldWorker->start();
 
         renderer.clear();
-        entities.drawAll(renderer.getHandle(), window.getWidth(), window.getHeight());
+        entities.drawSnapshot(finishedFrame, renderer.getHandle(), window.getWidth(), window.getHeight());
+
+        playerWorker->wait();
+        worldWorker->wait();
+
         renderer.present();
+        entities.copySnapshot(finishedFrame);
     }
 }
