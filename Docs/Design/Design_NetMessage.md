@@ -26,7 +26,7 @@ Synchronous 0MQ. Each connection uses a `PAIR` or `REQ`/`REP` socket. One socket
 
 ## Peer-to-peer
 
-`--p2p <host:port> ...` is a later piece. It does not call the server. Peers exchange a start tic, keep the earliest as the shared anchor, and compute the platform from `(now - anchor)` and tic size. Player states go directly between peers. A message with an older tic than the one already applied is dropped.
+`--p2p <bindPort> <host:port> ...` does not call the server. See `Docs/Design/Design_P2P.md`.
 
 ## Launch flags
 
@@ -34,4 +34,4 @@ Synchronous 0MQ. Each connection uses a `PAIR` or `REQ`/`REP` socket. One socket
 |---|---|
 | `--server` | Headless server |
 | `--client <host> <port>` | Windowed client |
-| `--p2p <host:port> ...` | Peer, no server |
+| `--p2p <bindPort> <host:port> ...` | Peer, no server |

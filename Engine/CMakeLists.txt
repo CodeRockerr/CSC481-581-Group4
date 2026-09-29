@@ -11,6 +11,7 @@ add_library(engine STATIC
     src/Timeline.cpp
     src/FrameWorker.cpp
     src/NetworkClient.cpp
+    src/PeerSession.cpp
 )
 
 target_include_directories(engine PUBLIC include PRIVATE ../vendored/SDL/src/video)
