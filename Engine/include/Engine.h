@@ -54,4 +54,5 @@ private:
     std::vector<float> stepTimelines();
     void buildPlayerFrame();
     void buildWorldFrame();
+    void paceFrame(Uint64 frameStartNS);
 };

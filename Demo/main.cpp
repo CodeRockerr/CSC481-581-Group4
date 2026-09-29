@@ -82,6 +82,8 @@ int main(int argc, char *argv[])
     Timeline &worldTime = engine.getTimeline(Engine::WorldTime);
     Timeline &globalTime = engine.getGlobalTimeline();
     int64_t lastTitleUpdate = 0;
+    uint64_t framesSinceTitle = 0;
+    uint64_t lastMessagesSent = 0;
 
     std::unordered_map<uint32_t, Entity *> remotePlayers;
     std::unordered_map<uint32_t, int64_t> lastTic;
@@ -240,33 +242,42 @@ int main(int argc, char *argv[])
                 spawnRemotes();
             }
 
+            ++framesSinceTitle;
             const int64_t now = globalTime.getTime();
             if (now - lastTitleUpdate >= 250'000'000)
             {
+                const double seconds = static_cast<double>(now - lastTitleUpdate) / 1'000'000'000.0;
+                const double loopHz = seconds > 0.0 ? static_cast<double>(framesSinceTitle) / seconds : 0.0;
+                framesSinceTitle = 0;
+                double sendHz = 0.0;
+                if (net)
+                {
+                    const uint64_t sent = net->getMessagesSent();
+                    sendHz = seconds > 0.0 ? static_cast<double>(sent - lastMessagesSent) / seconds : 0.0;
+                    lastMessagesSent = sent;
+                }
                 lastTitleUpdate = now;
-                char title[240];
+                char title[320];
                 if (peers)
                 {
                     std::snprintf(title, sizeof(title),
-                                  "peer %u | anchor %lld | playerTime: %s x%.1f | frames P %llu W %llu",
+                                  "peer %u | loop %.0f Hz | anchor %lld | playerTime: %s x%.1f",
                                   peers->getBindPort(),
+                                  loopHz,
                                   static_cast<long long>(peers->getAnchor()),
                                   playerTime.isPaused() ? "PAUSED" : "running",
-                                  playerTime.getScale(),
-                                  static_cast<unsigned long long>(engine.getPlayerFramesBuilt()),
-                                  static_cast<unsigned long long>(engine.getWorldFramesBuilt()));
+                                  playerTime.getScale());
                 }
                 else
                 {
                     std::snprintf(title, sizeof(title),
-                                  "client %u | playerTime: %s x%.1f tic %lld | worldTime: tic %lld | frames P %llu W %llu",
+                                  "client %u | loop %.0f Hz | sends %.0f/s | playerTime: %s x%.1f | world tic %lld",
                                   net ? net->getClientId() : 0u,
+                                  loopHz,
+                                  sendHz,
                                   playerTime.isPaused() ? "PAUSED" : "running",
                                   playerTime.getScale(),
-                                  static_cast<long long>(playerTime.getTime()),
-                                  static_cast<long long>(worldTime.getTime()),
-                                  static_cast<unsigned long long>(engine.getPlayerFramesBuilt()),
-                                  static_cast<unsigned long long>(engine.getWorldFramesBuilt()));
+                                  static_cast<long long>(worldTime.getTime()));
                 }
                 SDL_SetWindowTitle(engine.getWindow().getHandle(), title);
             }

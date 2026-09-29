@@ -8,6 +8,7 @@ Renderer::Renderer(Window &window)
     {
         throw std::runtime_error(std::string("Failed to create renderer: ") + SDL_GetError());
     }
+    SDL_SetRenderVSync(renderer, 0);
 }
 
 Renderer::~Renderer()
