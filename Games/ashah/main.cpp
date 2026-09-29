@@ -1,9 +1,20 @@
 #include "Engine.h"
 #include "Collision.h"
 #include "Image.h"
+#include "NetworkClient.h"
+#include "PeerSession.h"
+
 #include <cmath>
+#include <cstdint>
+#include <cstdio>
+#include <iostream>
+#include <memory>
+#include <mutex>
 #include <stdexcept>
 #include <string>
+#include <unordered_map>
+#include <utility>
+#include <vector>
 
 static bool isChromaMagenta(Uint8 r, Uint8 g, Uint8 b)
 {
@@ -63,8 +74,59 @@ static Entity bodyHitbox(const Entity &e, float padL, float padR, float padT, fl
     return box;
 }
 
-int main(int argc, char *agv[])
+int main(int argc, char *argv[])
 {
+    const char *host = nullptr;
+    int port = 5555;
+    uint16_t peerPort = 0;
+    std::vector<std::pair<std::string, uint16_t>> otherPeers;
+
+    if (argc >= 3 && std::string(argv[1]) == "--client")
+    {
+        host = argv[2];
+        if (argc >= 4)
+        {
+            port = std::stoi(argv[3]);
+        }
+    }
+    else if (argc >= 3 && std::string(argv[1]) == "--p2p")
+    {
+        peerPort = static_cast<uint16_t>(std::stoi(argv[2]));
+        for (int i = 3; i < argc; ++i)
+        {
+            const std::string text(argv[i]);
+            const auto colon = text.rfind(':');
+            if (colon == std::string::npos)
+            {
+                std::cerr << "Expected host:port, got " << text << '\n';
+                return 1;
+            }
+            otherPeers.emplace_back(text.substr(0, colon), static_cast<uint16_t>(std::stoi(text.substr(colon + 1))));
+        }
+    }
+
+    std::unique_ptr<NetworkClient> net;
+    if (host != nullptr)
+    {
+        net = std::make_unique<NetworkClient>(host, static_cast<uint16_t>(port));
+        if (!net->connect())
+        {
+            std::cerr << "Failed to connect to " << host << ":" << port << '\n';
+            return 1;
+        }
+    }
+
+    std::unique_ptr<PeerSession> peers;
+    if (peerPort != 0)
+    {
+        peers = std::make_unique<PeerSession>(peerPort);
+        for (const auto &other : otherPeers)
+        {
+            peers->connectTo(other.first, other.second);
+        }
+    }
+    const uint32_t localId = net ? net->getClientId() : (peers ? peers->getBindPort() : 0u);
+
     Engine engine("Lost Under the Sea");
     EntityManager &entities = engine.getEntities();
     SDL_Renderer *renderer = engine.getRenderer().getHandle();
@@ -100,8 +162,8 @@ int main(int argc, char *agv[])
     entities.setTexture(shelf, shelfTex, 1);
     shelf->affectedByGravity = false;
 
-    const float walkLeft = shelfX + shelfWidth * 0.08f;
-    const float walkRight = shelfX + shelfWidth * 0.92f;
+    const float walkLeft = shelfX;
+    const float walkRight = shelfX + shelfWidth;
 
     float diverTexW = 0.0f;
     float diverTexH = 0.0f;
@@ -110,7 +172,7 @@ int main(int argc, char *agv[])
     const float diverH = height * 0.13f;
     const float diverW = diverH * diverFrameAspect * 1.20f;
 
-    const float spawnX = width * 0.40f;
+    const float spawnX = width * 0.40f + 80.0f * static_cast<float>(localId % 4);
     const float shelfWalkY = shelfY + shelfHeight * shelfPadTop;
     const float standY = shelfWalkY - diverH * (1.0f - diverPadBottom);
     Entity *diver = entities.createEntity(spawnX, standY, diverW, diverH);
@@ -150,6 +212,90 @@ int main(int argc, char *agv[])
             diver->timelineId = Engine::WorldTime;
             respawnOnWorldTime = true;
         }
+    };
+
+    const float fishCenter = (fishMinX + fishMaxX) * 0.5f;
+    const float fishAmplitude = (fishMaxX - fishMinX) * 0.5f;
+    const float fishOmega = fishSpeed / fishAmplitude;
+
+    std::unordered_map<uint32_t, Entity *> remoteDivers;
+    std::unordered_map<uint32_t, int64_t> lastTic;
+    std::mutex spawnMutex;
+    std::vector<NetMessage> pendingSpawns;
+    int64_t lastTitleUpdate = 0;
+    uint64_t framesSinceTitle = 0;
+
+    auto showRemote = [&](const NetMessage &message)
+    {
+        if (message.tic < lastTic[message.clientId])
+        {
+            return;
+        }
+        lastTic[message.clientId] = message.tic;
+
+        auto found = remoteDivers.find(message.clientId);
+        if (found == remoteDivers.end())
+        {
+            std::lock_guard<std::mutex> lock(spawnMutex);
+            pendingSpawns.push_back(message);
+            return;
+        }
+
+        Entity *remote = found->second;
+        std::lock_guard<std::mutex> lock(remote->stateMutex.get());
+        remote->x = message.x;
+        remote->y = message.y;
+        remote->velocityX = 0.0f;
+        remote->velocityY = 0.0f;
+        remote->flipHorizontal = message.velocityX < 0.0f;
+        remote->spriteFrame = message.velocityX != 0.0f ? 1 : 0;
+    };
+
+    auto spawnRemotes = [&]()
+    {
+        std::vector<NetMessage> spawns;
+        {
+            std::lock_guard<std::mutex> lock(spawnMutex);
+            spawns.swap(pendingSpawns);
+        }
+        for (const NetMessage &message : spawns)
+        {
+            if (remoteDivers.count(message.clientId) != 0)
+            {
+                continue;
+            }
+            Entity *remote = entities.createEntity(message.x, message.y, diverW, diverH);
+            entities.setTexture(remote, diverTex, 4);
+            remote->affectedByGravity = false;
+            remote->timelineId = Engine::WorldTime;
+            remote->color = {70, 255, 90, 255};
+            remoteDivers[message.clientId] = remote;
+        }
+    };
+
+    auto placeFish = [&](float phase)
+    {
+        if (phase > 1.0f)
+        {
+            phase = 1.0f;
+        }
+        if (phase < -1.0f)
+        {
+            phase = -1.0f;
+        }
+        const float nextX = fishCenter + fishAmplitude * phase;
+        if (nextX > fish->x + 0.25f)
+        {
+            fish->flipHorizontal = false;
+        }
+        else if (nextX < fish->x - 0.25f)
+        {
+            fish->flipHorizontal = true;
+        }
+        fish->x = nextX;
+        fish->y = fishY;
+        fish->velocityX = 0.0f;
+        fish->velocityY = 0.0f;
     };
 
     const int bubbleCount = 5;
@@ -247,7 +393,7 @@ int main(int argc, char *agv[])
 
         if (moving && grounded)
         {
-            diverAnim += deltaTime;
+            diverAnim += playerDelta;
             diver->spriteFrame = 1 + (static_cast<int>(diverAnim * 8.0f) % 3);
         }
         else if (!grounded)
@@ -259,15 +405,63 @@ int main(int argc, char *agv[])
             diverAnim = 0.0f;
             diver->spriteFrame = 0;
         }
-        const float fishCenter = (fishMinX + fishMaxX) * 0.5f;
-        const float fishAmplitude = (fishMaxX - fishMinX) * 0.5f;
-        const float fishOmega = fishSpeed / fishAmplitude;
-        const double fishSeconds = worldTime.getSeconds();
-        fish->y = fishY;
-        fish->x = fishCenter + fishAmplitude * static_cast<float>(std::sin(fishOmega * fishSeconds));
-        fish->flipHorizontal = std::cos(fishOmega * fishSeconds) < 0.0;
-        fishAnim += deltaTime;
-        fish->spriteFrame = static_cast<int>(fishAnim * 8.0f) % 4;
+        if (!net && !peers)
+        {
+            const double fishSeconds = worldTime.getSeconds();
+            placeFish(static_cast<float>(std::sin(fishOmega * fishSeconds)));
+            fishAnim += deltaTime;
+            fish->spriteFrame = static_cast<int>(fishAnim * 8.0f) % 4;
+        }
+
+        if (net || peers)
+        {
+            NetMessage state{};
+            state.tic = playerTime.getTime();
+            state.x = diver->x;
+            state.y = diver->y;
+            state.velocityX = diver->velocityX;
+            state.velocityY = grounded ? 0.0f : diver->velocityY;
+            if (net)
+            {
+                net->sendPlayerState(state);
+            }
+            if (peers)
+            {
+                peers->sendPlayerState(state);
+            }
+            spawnRemotes();
+
+            ++framesSinceTitle;
+            const int64_t now = engine.getGlobalTimeline().getTime();
+            if (now - lastTitleUpdate >= 250'000'000)
+            {
+                const double seconds = static_cast<double>(now - lastTitleUpdate) / 1'000'000'000.0;
+                const double loopHz = seconds > 0.0 ? static_cast<double>(framesSinceTitle) / seconds : 0.0;
+                framesSinceTitle = 0;
+                lastTitleUpdate = now;
+                char title[240];
+                if (peers)
+                {
+                    std::snprintf(title, sizeof(title),
+                                  "Lost Under the Sea | peer %u | anchor %lld | loop %.0f Hz | diver %s x%.1f",
+                                  peers->getBindPort(),
+                                  static_cast<long long>(peers->getAnchor()),
+                                  loopHz,
+                                  playerTime.isPaused() ? "PAUSED" : "running",
+                                  playerTime.getScale());
+                }
+                else
+                {
+                    std::snprintf(title, sizeof(title),
+                                  "Lost Under the Sea | client %u | loop %.0f Hz | diver %s x%.1f",
+                                  localId,
+                                  loopHz,
+                                  playerTime.isPaused() ? "PAUSED" : "running",
+                                  playerTime.getScale());
+                }
+                SDL_SetWindowTitle(engine.getWindow().getHandle(), title);
+            }
+        }
 
         for (int i = 0; i < bubbleCount; ++i)
         {
@@ -329,7 +523,48 @@ int main(int argc, char *agv[])
         if (diver->y > static_cast<float>(referenceHeight))
         {
             dropInFromTop();
-        } });
+        } },
+        [&](float worldDelta)
+        {
+            bool haveFish = false;
+            float phase = 0.0f;
+
+            if (peers)
+            {
+                phase = (peers->platformX() - 520.0f) / 180.0f;
+                haveFish = true;
+                for (const NetMessage &message : peers->getRemotePlayers())
+                {
+                    if (message.clientId != peers->getBindPort())
+                    {
+                        showRemote(message);
+                    }
+                }
+            }
+            else if (net)
+            {
+                for (const NetMessage &message : net->getLatestMessages())
+                {
+                    if (message.type == NetMessageType::PlatformState)
+                    {
+                        phase = (message.x - 520.0f) / 180.0f;
+                        haveFish = true;
+                    }
+                    else if (message.type == NetMessageType::PlayerState &&
+                             message.clientId != net->getClientId())
+                    {
+                        showRemote(message);
+                    }
+                }
+            }
+
+            if (haveFish)
+            {
+                placeFish(phase);
+                fishAnim += worldDelta;
+                fish->spriteFrame = static_cast<int>(fishAnim * 8.0f) % 4;
+            }
+        });
 
     SDL_DestroyTexture(backgroundTex);
     SDL_DestroyTexture(shelfTex);
