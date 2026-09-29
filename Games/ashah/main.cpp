@@ -121,6 +121,7 @@ int main(int argc, char *agv[])
     bool respawnOnWorldTime = false;
     float diverAnim = 0.0f;
     Timeline &playerTime = engine.getTimeline(Engine::PlayerTime);
+    Timeline &worldTime = engine.getTimeline(Engine::WorldTime);
 
     float fishTexW = 0.0f;
     float fishTexH = 0.0f;
@@ -135,7 +136,6 @@ int main(int argc, char *agv[])
     float fishMinX = walkLeft;
     float fishMaxX = walkRight - fishW;
     float fishSpeed = 140.0f;
-    int fishDir = 1;
     float fishAnim = 0.0f;
 
     auto dropInFromTop = [&]()
@@ -259,19 +259,13 @@ int main(int argc, char *agv[])
             diverAnim = 0.0f;
             diver->spriteFrame = 0;
         }
+        const float fishCenter = (fishMinX + fishMaxX) * 0.5f;
+        const float fishAmplitude = (fishMaxX - fishMinX) * 0.5f;
+        const float fishOmega = fishSpeed / fishAmplitude;
+        const double fishSeconds = worldTime.getSeconds();
         fish->y = fishY;
-        fish->x += fishSpeed * fishDir * deltaTime;
-        if (fish->x >= fishMaxX)
-        {
-            fish->x = fishMaxX;
-            fishDir = -1;
-        }
-        else if (fish->x <= fishMinX)
-        {
-            fish->x = fishMinX;
-            fishDir = 1;
-        }
-        fish->flipHorizontal = (fishDir < 0);
+        fish->x = fishCenter + fishAmplitude * static_cast<float>(std::sin(fishOmega * fishSeconds));
+        fish->flipHorizontal = std::cos(fishOmega * fishSeconds) < 0.0;
         fishAnim += deltaTime;
         fish->spriteFrame = static_cast<int>(fishAnim * 8.0f) % 4;
 
