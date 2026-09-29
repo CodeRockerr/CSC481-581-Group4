@@ -115,9 +115,12 @@ int main(int argc, char *agv[])
     const float standY = shelfWalkY - diverH * (1.0f - diverPadBottom);
     Entity *diver = entities.createEntity(spawnX, standY, diverW, diverH);
     entities.setTexture(diver, diverTex, 4);
+    diver->timelineId = Engine::PlayerTime;
     diver->affectedByGravity = true;
     bool grounded = true;
+    bool respawnOnWorldTime = false;
     float diverAnim = 0.0f;
+    Timeline &playerTime = engine.getTimeline(Engine::PlayerTime);
 
     float fishTexW = 0.0f;
     float fishTexH = 0.0f;
@@ -142,6 +145,11 @@ int main(int argc, char *agv[])
         diver->velocityX = 0.0f;
         diver->velocityY = 80.0f;
         grounded = false;
+        if (playerTime.isPaused())
+        {
+            diver->timelineId = Engine::WorldTime;
+            respawnOnWorldTime = true;
+        }
     };
 
     const int bubbleCount = 5;
@@ -205,7 +213,14 @@ int main(int argc, char *agv[])
                 : 1.0f;
         background->width = currentWidth / scaleX;
         background->height = currentHeight / scaleY;
+        if (respawnOnWorldTime && !playerTime.isPaused())
+        {
+            diver->timelineId = Engine::PlayerTime;
+            respawnOnWorldTime = false;
+        }
+
         const float moveSpeed = 380.0f;
+        const float playerDelta = static_cast<float>(playerTime.getLastDelta());
         bool moving = false;
         diver->velocityX = 0.0f;
 
@@ -224,7 +239,7 @@ int main(int argc, char *agv[])
         if ((Input::isKeyJustPressed(SDL_SCANCODE_W) ||
              Input::isKeyJustPressed(SDL_SCANCODE_UP) ||
              Input::isKeyJustPressed(SDL_SCANCODE_SPACE)) &&
-            grounded)
+            grounded && !playerTime.isPaused())
         {
             diver->velocityY = -720.0f;
             grounded = false;
@@ -298,6 +313,11 @@ int main(int argc, char *agv[])
             diver->y = shelfWalkY - diver->height * (1.0f - diverPadBottom);
             diver->velocityY = 0.0f;
             grounded = true;
+            if (respawnOnWorldTime)
+            {
+                diver->timelineId = Engine::PlayerTime;
+                respawnOnWorldTime = false;
+            }
         }
         else
         {
