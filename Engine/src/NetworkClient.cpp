@@ -252,6 +252,7 @@ void NetworkClient::receiveLoop()
             reconnect();
             continue;
         }
+        messagesSent.fetch_add(1);
 
         std::vector<NetMessage> snapshot;
         if (!readSnapshot(snapshot))

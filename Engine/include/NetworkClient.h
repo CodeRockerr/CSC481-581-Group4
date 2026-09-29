@@ -26,6 +26,7 @@ public:
     void sendPlayerState(const NetMessage &message);
     std::vector<NetMessage> getLatestMessages();
     uint32_t getClientId() const;
+    uint64_t getMessagesSent() const { return messagesSent.load(); }
 
 private:
     void receiveLoop();
@@ -52,4 +53,5 @@ private:
 
     uint32_t clientId = 0;
     std::string clientEndpoint;
+    std::atomic<uint64_t> messagesSent{0};
 };

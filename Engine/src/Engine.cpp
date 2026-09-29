@@ -81,6 +81,19 @@ void Engine::buildWorldFrame()
         worldCallback(static_cast<float>(timelines[WorldTime]->getLastDelta()));
 }
 
+void Engine::paceFrame(Uint64 frameStartNS)
+{
+    constexpr Uint64 baseFrameNS = 1'000'000'000 / 60;
+    double scale = getTimeline(PlayerTime).getScale();
+    if (scale < 0.5)
+        scale = 0.5;
+
+    const Uint64 frameNS = static_cast<Uint64>(static_cast<double>(baseFrameNS) / scale);
+    const Uint64 elapsed = SDL_GetTicksNS() - frameStartNS;
+    if (elapsed < frameNS)
+        SDL_DelayNS(frameNS - elapsed);
+}
+
 void Engine::run(const std::function<void(float)> &gameUpdate,
                  const std::function<void(float)> &worldUpdate)
 {
@@ -95,6 +108,7 @@ void Engine::run(const std::function<void(float)> &gameUpdate,
 
     while (running)
     {
+        const Uint64 frameStartNS = SDL_GetTicksNS();
         SDL_Event event;
         while (SDL_PollEvent(&event))
         {
@@ -126,5 +140,6 @@ void Engine::run(const std::function<void(float)> &gameUpdate,
 
         renderer.present();
         entities.copySnapshot(finishedFrame);
+        paceFrame(frameStartNS);
     }
 }
