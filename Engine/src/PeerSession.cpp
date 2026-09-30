@@ -136,6 +136,16 @@ void PeerSession::rememberPlayer(const NetMessage &message)
     remotePlayers[message.clientId] = message;
 }
 
+void PeerSession::forgetPlayer(uint32_t clientId)
+{
+    if (clientId == 0)
+    {
+        return;
+    }
+    std::lock_guard<std::mutex> lock(stateMutex);
+    remotePlayers.erase(clientId);
+}
+
 NetMessage PeerSession::currentPlayer() const
 {
     std::lock_guard<std::mutex> lock(stateMutex);
@@ -255,6 +265,7 @@ bool PeerSession::exchange(void *socket, bool replyFirst)
 void PeerSession::servePeer(void *socket)
 {
     setSocketOptions(socket);
+    uint32_t remoteId = 0;
     while (running)
     {
         bool timedOut = false;
@@ -270,6 +281,13 @@ void PeerSession::servePeer(void *socket)
             sendOne(socket, error, 0);
             break;
         }
+        for (const NetMessage &message : incoming)
+        {
+            if (message.type == NetMessageType::PlayerState && message.clientId != 0)
+            {
+                remoteId = message.clientId;
+            }
+        }
         if (!incoming.empty() && incoming.front().type == NetMessageType::Leave)
         {
             NetMessage reply{};
@@ -283,6 +301,7 @@ void PeerSession::servePeer(void *socket)
             break;
         }
     }
+    forgetPlayer(remoteId);
     zmq_close(socket);
 }
 
@@ -385,6 +404,7 @@ void PeerSession::dialPeer(std::string host, uint16_t port)
         {
         }
 
+        forgetPlayer(port);
         zmq_close(socket);
         if (running)
         {

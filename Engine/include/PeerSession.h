@@ -36,6 +36,7 @@ private:
     void servePeer(void *socket);
     void dialPeer(std::string host, uint16_t port);
     void rememberPlayer(const NetMessage &message);
+    void forgetPlayer(uint32_t clientId);
     NetMessage currentPlayer() const;
 
     bool sendOne(void *socket, const NetMessage &message, int flags);
