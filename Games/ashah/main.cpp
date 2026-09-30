@@ -212,10 +212,12 @@ int main(int argc, char *argv[])
     };
     const bool localAltSuit = altSuit(localId);
 
-    const float spawnX = width * 0.40f + 80.0f * static_cast<float>(localId % 4);
+    const float localW = localAltSuit ? diverAltW : diverW;
+    const int spawnSlot = static_cast<int>(localId % 4u);
+    const float spawnX = shelfX + (shelfWidth - localW) * (0.08f + 0.28f * static_cast<float>(spawnSlot));
     const float standY = shelfWalkY - diverH * (1.0f - diverPadBottom);
     const float spawnY = shelfWalkY - (localAltSuit ? diverAltH : diverH) * (1.0f - diverPadBottom);
-    Entity *diver = entities.createEntity(spawnX, spawnY, localAltSuit ? diverAltW : diverW, localAltSuit ? diverAltH : diverH);
+    Entity *diver = entities.createEntity(spawnX, spawnY, localW, localAltSuit ? diverAltH : diverH);
     entities.setTexture(diver, localAltSuit ? diverAltTex : diverTex, 4);
     diver->timelineId = Engine::PlayerTime;
     diver->affectedByGravity = true;
