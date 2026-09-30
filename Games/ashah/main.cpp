@@ -13,6 +13,7 @@
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -144,6 +145,7 @@ int main(int argc, char *argv[])
     SDL_Texture *backgroundTex = loadTexture(renderer, "Games/ashah/assets/background.png", false);
     SDL_Texture *shelfTex = loadTexture(renderer, "Games/ashah/assets/shelf.png", true);
     SDL_Texture *diverTex = loadTexture(renderer, "Games/ashah/assets/diver.png", true);
+    SDL_Texture *diverAltTex = loadTexture(renderer, "Games/ashah/assets/diver_alt.png", true);
     SDL_Texture *fishTex = loadTexture(renderer, "Games/ashah/assets/fish.png", true);
     SDL_Texture *bubbleTex = loadTexture(renderer, "Games/ashah/assets/bubble.png", true);
 
@@ -197,11 +199,24 @@ int main(int argc, char *argv[])
     const float diverFrameAspect = (diverTexW / 4.0f) / diverTexH;
     const float diverH = height * 0.13f;
     const float diverW = diverH * diverFrameAspect * 1.20f;
+    float diverAltTexW = 0.0f;
+    float diverAltTexH = 0.0f;
+    SDL_GetTextureSize(diverAltTex, &diverAltTexW, &diverAltTexH);
+    // The yellow sheet has more empty space around the body, so the same box height
+    // draws a much smaller diver. Scale the box until the body matches the orange one.
+    const float diverAltH = diverH * 1.50f;
+    const float diverAltW = diverAltH * ((diverAltTexW / 4.0f) / diverAltTexH) * 1.20f;
+    const auto altSuit = [](uint32_t id)
+    {
+        return id != 0 && (id % 2u) == 0u;
+    };
+    const bool localAltSuit = altSuit(localId);
 
     const float spawnX = width * 0.40f + 80.0f * static_cast<float>(localId % 4);
     const float standY = shelfWalkY - diverH * (1.0f - diverPadBottom);
-    Entity *diver = entities.createEntity(spawnX, standY, diverW, diverH);
-    entities.setTexture(diver, diverTex, 4);
+    const float spawnY = shelfWalkY - (localAltSuit ? diverAltH : diverH) * (1.0f - diverPadBottom);
+    Entity *diver = entities.createEntity(spawnX, spawnY, localAltSuit ? diverAltW : diverW, localAltSuit ? diverAltH : diverH);
+    entities.setTexture(diver, localAltSuit ? diverAltTex : diverTex, 4);
     diver->timelineId = Engine::PlayerTime;
     diver->affectedByGravity = true;
     bool grounded = true;
@@ -328,8 +343,16 @@ int main(int argc, char *argv[])
         remote->y = message.y;
         remote->velocityX = 0.0f;
         remote->velocityY = 0.0f;
+        remote->active = true;
         remote->flipHorizontal = message.velocityX < 0.0f;
-        remote->spriteFrame = message.velocityX != 0.0f ? 1 : 0;
+        if (message.velocityY != 0.0f)
+        {
+            remote->spriteFrame = altSuit(message.clientId) ? 2 : 1;
+        }
+        else
+        {
+            remote->spriteFrame = message.velocityX != 0.0f ? 1 : 0;
+        }
     };
 
     auto spawnRemotes = [&]()
@@ -345,11 +368,12 @@ int main(int argc, char *argv[])
             {
                 continue;
             }
-            Entity *remote = entities.createEntity(message.x, message.y, diverW, diverH);
-            entities.setTexture(remote, diverTex, 4);
+            const bool alt = altSuit(message.clientId);
+            Entity *remote = entities.createEntity(
+                message.x, message.y, alt ? diverAltW : diverW, alt ? diverAltH : diverH);
+            entities.setTexture(remote, alt ? diverAltTex : diverTex, 4);
             remote->affectedByGravity = false;
             remote->timelineId = Engine::WorldTime;
-            remote->color = {70, 255, 90, 255};
             remoteDivers[message.clientId] = remote;
         }
     };
@@ -478,11 +502,18 @@ int main(int argc, char *argv[])
         if (moving && grounded)
         {
             diverAnim += playerDelta;
-            diver->spriteFrame = 1 + (static_cast<int>(diverAnim * 8.0f) % 3);
+            if (localAltSuit)
+            {
+                diver->spriteFrame = (static_cast<int>(diverAnim * 8.0f) % 2) == 0 ? 1 : 3;
+            }
+            else
+            {
+                diver->spriteFrame = 1 + (static_cast<int>(diverAnim * 8.0f) % 3);
+            }
         }
         else if (!grounded)
         {
-            diver->spriteFrame = 1; // mid-stride as jump pose
+            diver->spriteFrame = localAltSuit ? 2 : 1;
         }
         else
         {
@@ -635,22 +666,31 @@ int main(int argc, char *argv[])
         {
             bool haveFish = false;
             float phase = 0.0f;
+            bool haveSnapshot = false;
+            std::unordered_set<uint32_t> present;
 
             if (peers)
             {
                 phase = (peers->platformX() - 520.0f) / 180.0f;
                 haveFish = true;
+                haveSnapshot = true;
                 for (const NetMessage &message : peers->getRemotePlayers())
                 {
                     if (message.clientId != peers->getBindPort())
                     {
+                        present.insert(message.clientId);
                         showRemote(message);
                     }
                 }
             }
             else if (net)
             {
-                for (const NetMessage &message : net->getLatestMessages())
+                const std::vector<NetMessage> messages = net->getLatestMessages();
+                if (!messages.empty())
+                {
+                    haveSnapshot = true;
+                }
+                for (const NetMessage &message : messages)
                 {
                     if (message.type == NetMessageType::PlatformState)
                     {
@@ -660,8 +700,18 @@ int main(int argc, char *argv[])
                     else if (message.type == NetMessageType::PlayerState &&
                              message.clientId != net->getClientId())
                     {
+                        present.insert(message.clientId);
                         showRemote(message);
                     }
+                }
+            }
+
+            if (haveSnapshot)
+            {
+                for (auto &entry : remoteDivers)
+                {
+                    std::lock_guard<std::mutex> lock(entry.second->stateMutex.get());
+                    entry.second->active = present.count(entry.first) != 0;
                 }
             }
 
@@ -676,6 +726,7 @@ int main(int argc, char *argv[])
     SDL_DestroyTexture(backgroundTex);
     SDL_DestroyTexture(shelfTex);
     SDL_DestroyTexture(diverTex);
+    SDL_DestroyTexture(diverAltTex);
     SDL_DestroyTexture(fishTex);
     SDL_DestroyTexture(bubbleTex);
     return 0;
