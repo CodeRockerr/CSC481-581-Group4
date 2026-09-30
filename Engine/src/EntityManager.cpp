@@ -87,8 +87,12 @@ void EntityManager::drawEntity(const Entity &e, SDL_Renderer *renderer, float sc
 
         const SDL_FlipMode flip =
             e.flipHorizontal ? SDL_FLIP_HORIZONTAL : SDL_FLIP_NONE;
+        SDL_SetTextureColorMod(e.texture, e.color.r, e.color.g, e.color.b);
+        SDL_SetTextureAlphaMod(e.texture, e.color.a);
         SDL_RenderTextureRotated(
             renderer, e.texture, &source, &rect, 0.0, nullptr, flip);
+        SDL_SetTextureColorMod(e.texture, 255, 255, 255);
+        SDL_SetTextureAlphaMod(e.texture, 255);
     }
     else
     {
