@@ -165,6 +165,32 @@ int main(int argc, char *argv[])
     const float walkLeft = shelfX;
     const float walkRight = shelfX + shelfWidth;
 
+    struct Ledge
+    {
+        Entity *entity;
+        float left;
+        float right;
+        float surfaceY;
+    };
+
+    const float shelfWalkY = shelfY + shelfHeight * shelfPadTop;
+    const float ledgeHeight = shelfHeight;
+    const float ledgeWidth = shelfWidth * 0.26f;
+    auto makeLedge = [&](float left, float surfaceY)
+    {
+        const float y = surfaceY - ledgeHeight * shelfPadTop;
+        Entity *ledge = entities.createEntity(left, y, ledgeWidth, ledgeHeight);
+        entities.setTexture(ledge, shelfTex, 1);
+        ledge->affectedByGravity = false;
+        return Ledge{ledge, left, left + ledgeWidth, surfaceY};
+    };
+
+    Ledge ledges[3] = {
+        Ledge{shelf, walkLeft, walkRight, shelfWalkY},
+        makeLedge(shelfX + shelfWidth * 0.06f, shelfWalkY - 90.0f),
+        makeLedge(shelfX + shelfWidth * 0.36f, shelfWalkY - 150.0f),
+    };
+
     float diverTexW = 0.0f;
     float diverTexH = 0.0f;
     SDL_GetTextureSize(diverTex, &diverTexW, &diverTexH);
@@ -173,7 +199,6 @@ int main(int argc, char *argv[])
     const float diverW = diverH * diverFrameAspect * 1.20f;
 
     const float spawnX = width * 0.40f + 80.0f * static_cast<float>(localId % 4);
-    const float shelfWalkY = shelfY + shelfHeight * shelfPadTop;
     const float standY = shelfWalkY - diverH * (1.0f - diverPadBottom);
     Entity *diver = entities.createEntity(spawnX, standY, diverW, diverH);
     entities.setTexture(diver, diverTex, 4);
@@ -213,6 +238,62 @@ int main(int argc, char *argv[])
             respawnOnWorldTime = true;
         }
     };
+
+    int health = 3;
+    bool escaped = false;
+    bool fishContact = false;
+    const char *story = "Climb the ledges. The fish owns the lower shelf.";
+    Entity *hearts[3];
+    for (int i = 0; i < 3; ++i)
+    {
+        hearts[i] = entities.createEntity(28.0f + i * 36.0f, 28.0f, 24.0f, 24.0f, {220, 40, 50, 255});
+        hearts[i]->affectedByGravity = false;
+    }
+
+    auto refreshHearts = [&]()
+    {
+        for (int i = 0; i < 3; ++i)
+        {
+            hearts[i]->active = i < health;
+        }
+    };
+
+    auto loseLife = [&](const char *hitStory, const char *emptyStory)
+    {
+        if (health > 0)
+        {
+            --health;
+        }
+        if (health == 0)
+        {
+            health = 3;
+            escaped = false;
+            story = emptyStory;
+        }
+        else
+        {
+            story = hitStory;
+        }
+        refreshHearts();
+        SDL_Log("%s", story);
+        char title[320];
+        std::snprintf(title, sizeof(title), "Lost Under the Sea | health %d | %s", health, story);
+        SDL_SetWindowTitle(engine.getWindow().getHandle(), title);
+        dropInFromTop();
+    };
+
+    auto caughtByFish = [&]()
+    {
+        if (fishContact)
+        {
+            return;
+        }
+        fishContact = true;
+        loseLife("The fish struck. Climb above it.", "The fish caught the diver. Climb again.");
+    };
+
+    SDL_SetWindowTitle(engine.getWindow().getHandle(),
+                       "Lost Under the Sea | health 3 | Climb the ledges. The fish owns the lower shelf.");
 
     const float fishCenter = (fishMinX + fishMaxX) * 0.5f;
     const float fishAmplitude = (fishMaxX - fishMinX) * 0.5f;
@@ -335,8 +416,11 @@ int main(int argc, char *argv[])
             }
             const char *modeName =
                 entities.getScaleMode() == ScaleMode::Pixel ? "Pixel" : "Percentage";
-            std::string title = std::string("Lost Under the Sea — ") + modeName;
-            SDL_SetWindowTitle(engine.getWindow().getHandle(), title.c_str());
+            char title[320];
+            std::snprintf(title, sizeof(title),
+                          "Lost Under the Sea | health %d | %s | %s",
+                          health, story, modeName);
+            SDL_SetWindowTitle(engine.getWindow().getHandle(), title);
             SDL_Log("Scale mode: %s", modeName);
         }
 
@@ -439,25 +523,25 @@ int main(int argc, char *argv[])
                 const double loopHz = seconds > 0.0 ? static_cast<double>(framesSinceTitle) / seconds : 0.0;
                 framesSinceTitle = 0;
                 lastTitleUpdate = now;
-                char title[240];
+                char title[320];
                 if (peers)
                 {
                     std::snprintf(title, sizeof(title),
-                                  "Lost Under the Sea | peer %u | anchor %lld | loop %.0f Hz | diver %s x%.1f",
+                                  "Lost Under the Sea | health %d | %s | peer %u | anchor %lld | loop %.0f Hz",
+                                  health,
+                                  story,
                                   peers->getBindPort(),
                                   static_cast<long long>(peers->getAnchor()),
-                                  loopHz,
-                                  playerTime.isPaused() ? "PAUSED" : "running",
-                                  playerTime.getScale());
+                                  loopHz);
                 }
                 else
                 {
                     std::snprintf(title, sizeof(title),
-                                  "Lost Under the Sea | client %u | loop %.0f Hz | diver %s x%.1f",
+                                  "Lost Under the Sea | health %d | %s | client %u | loop %.0f Hz",
+                                  health,
+                                  story,
                                   localId,
-                                  loopHz,
-                                  playerTime.isPaused() ? "PAUSED" : "running",
-                                  playerTime.getScale());
+                                  loopHz);
                 }
                 SDL_SetWindowTitle(engine.getWindow().getHandle(), title);
             }
@@ -490,21 +574,41 @@ int main(int argc, char *argv[])
             }
         }
 
-        const float shelfWalkY = shelf->y + shelf->height * shelfPadTop;
         const float diverFeet = diver->y + diver->height * (1.0f - diverPadBottom);
         const float diverMidX = diver->x + diver->width * 0.5f;
-        const bool overShelf = diverMidX > walkLeft && diverMidX < walkRight;
-        const bool onShelf = Collision::checkCollision(*diver, *shelf) && overShelf;
-
-        if (onShelf && diver->velocityY >= 0.0f && diverFeet >= shelfWalkY - 16.0f)
+        int landed = -1;
+        float bestSurface = -1.0e9f;
+        for (int i = 0; i < 3; ++i)
         {
-            diver->y = shelfWalkY - diver->height * (1.0f - diverPadBottom);
+            const bool overLedge = diverMidX > ledges[i].left && diverMidX < ledges[i].right;
+            const bool touching = Collision::checkCollision(*diver, *ledges[i].entity);
+            const float feetGap = diverFeet - ledges[i].surfaceY;
+            if (touching && overLedge && diver->velocityY >= 0.0f &&
+                feetGap >= -36.0f && feetGap <= 40.0f && ledges[i].surfaceY > bestSurface)
+            {
+                bestSurface = ledges[i].surfaceY;
+                landed = i;
+            }
+        }
+
+        if (landed >= 0)
+        {
+            diver->y = ledges[landed].surfaceY - diver->height * (1.0f - diverPadBottom);
             diver->velocityY = 0.0f;
             grounded = true;
             if (respawnOnWorldTime)
             {
                 diver->timelineId = Engine::PlayerTime;
                 respawnOnWorldTime = false;
+            }
+            if (landed == 2 && !escaped)
+            {
+                escaped = true;
+                story = "The diver reached the high ledge and found air.";
+                SDL_Log("%s", story);
+                char title[320];
+                std::snprintf(title, sizeof(title), "Lost Under the Sea | health %d | %s", health, story);
+                SDL_SetWindowTitle(engine.getWindow().getHandle(), title);
             }
         }
         else
@@ -516,13 +620,16 @@ int main(int argc, char *argv[])
         const Entity fishHit = bodyHitbox(*fish, 0.20f, 0.18f, 0.42f, 0.22f);
         if (Collision::checkCollision(diverHit, fishHit))
         {
-            SDL_Log("The fish caught the diver!");
-            dropInFromTop();
+            caughtByFish();
+        }
+        else
+        {
+            fishContact = false;
         }
 
         if (diver->y > static_cast<float>(referenceHeight))
         {
-            dropInFromTop();
+            loseLife("The diver fell off the shelf.", "The diver fell. Climb again.");
         } },
         [&](float worldDelta)
         {
