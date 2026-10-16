@@ -19,6 +19,7 @@ Engine::Engine(const std::string &title, int width, int height)
 {
     entities.setReferenceResolution(window.getWidth(), window.getHeight());
     objects.setReferenceResolution(window.getWidth(), window.getHeight());
+    camera.setViewport(static_cast<float>(window.getWidth()), static_cast<float>(window.getHeight()));
     createTimeline(DefaultTicSize, 1.0);
     createTimeline(DefaultTicSize, 1.0);
 }
@@ -147,6 +148,8 @@ void Engine::run(const std::function<void(float)> &gameUpdate,
             if (event.type == SDL_EVENT_WINDOW_RESIZED)
             {
                 window.setSize(event.window.data1, event.window.data2);
+                camera.setViewport(static_cast<float>(event.window.data1),
+                                   static_cast<float>(event.window.data2));
             }
         }
 
@@ -163,8 +166,9 @@ void Engine::run(const std::function<void(float)> &gameUpdate,
         worldWorker->start();
 
         renderer.clear();
+        camera.update(objects);
         entities.drawSnapshot(finishedFrame, renderer.getHandle(), window.getWidth(), window.getHeight());
-        objects.drawSnapshot(finishedObjectFrame, renderer.getHandle(), window.getWidth(), window.getHeight());
+        objects.drawSnapshot(finishedObjectFrame, renderer.getHandle(), window.getWidth(), window.getHeight(), camera);
 
         playerWorker->wait();
         worldWorker->wait();
