@@ -14,7 +14,7 @@ struct Transform : Component
     float width = 0.0f;
     float height = 0.0f;
 
-    SDL_FRect getBOunds() const { return {x, y, width, height}; }
+    SDL_FRect getBounds() const { return {x, y, width, height}; }
 };
 
 struct Sprite : Component
