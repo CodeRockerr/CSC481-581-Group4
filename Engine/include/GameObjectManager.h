@@ -9,6 +9,7 @@
 #include "GameObject.h"
 #include "RenderItem.h"
 #include "ScaleMode.h"
+#include "Camera.h"
 
 class GameObjectManager
 {
@@ -30,7 +31,7 @@ public:
     void updateTimeline(int timelineId, float deltaTime);
     void copySnapshot(std::vector<RenderItem> &snapshot) const;
     void drawSnapshot(const std::vector<RenderItem> &snapshot, SDL_Renderer *renderer,
-                      int windowWidth, int windowHeight) const;
+                      int windowWidth, int windowHeight, const Camera &camera) const;
 
     void setReferenceResolution(int w, int h)
     {
@@ -72,7 +73,8 @@ public:
     }
 
 private:
-    void drawItem(const RenderItem &item, SDL_Renderer *renderer, float scaleX, float scaleY) const;
+    void drawItem(const RenderItem &item, SDL_Renderer *renderer, float scaleX, float scaleY,
+                  const Camera &camera) const;
 
     std::vector<std::unique_ptr<GameObject>> objects;
     std::unordered_map<uint32_t, GameObject *> byId;
