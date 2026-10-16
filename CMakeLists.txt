@@ -77,3 +77,15 @@ target_include_directories(object_model_test PRIVATE
 target_link_libraries(object_model_test PRIVATE
     engine
 )
+
+add_executable(object_systems_test
+    ObjectSystemsTest.cpp
+)
+
+target_include_directories(object_systems_test PRIVATE
+    Engine/include
+)
+
+target_link_libraries(object_systems_test PRIVATE
+    engine
+)
