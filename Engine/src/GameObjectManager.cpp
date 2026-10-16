@@ -160,7 +160,7 @@ void GameObjectManager::copySnapshot(std::vector<RenderItem> &snapshot) const
 }
 
 void GameObjectManager::drawSnapshot(const std::vector<RenderItem> &snapshot, SDL_Renderer *renderer,
-                                     int windowWidth, int windowHeight) const
+                                     int windowWidth, int windowHeight, const Camera &camera) const
 {
     float scaleX = 1.0f;
     float scaleY = 1.0f;
@@ -173,22 +173,29 @@ void GameObjectManager::drawSnapshot(const std::vector<RenderItem> &snapshot, SD
 
     for (const RenderItem &item : snapshot)
     {
-        drawItem(item, renderer, scaleX, scaleY);
+        drawItem(item, renderer, scaleX, scaleY, camera);
     }
 }
 
-void GameObjectManager::drawItem(const RenderItem &item, SDL_Renderer *renderer, float scaleX, float scaleY) const
+void GameObjectManager::drawItem(const RenderItem &item, SDL_Renderer *renderer, float scaleX, float scaleY,
+                                 const Camera &camera) const
 {
     if (!item.active || !item.visible)
     {
         return;
     }
 
+    float screenX = 0.0f;
+    float screenY = 0.0f;
+    float screenW = 0.0f;
+    float screenH = 0.0f;
+    camera.worldRectToScreen(item.x, item.y, item.width, item.height, screenX, screenY, screenW, screenH);
+
     SDL_FRect rect{
-        item.x * scaleX,
-        item.y * scaleY,
-        item.width * scaleX,
-        item.height * scaleY};
+        screenX * scaleX,
+        screenY * scaleY,
+        screenW * scaleX,
+        screenH * scaleY};
 
     if (item.texture)
     {
