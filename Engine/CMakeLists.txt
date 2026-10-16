@@ -3,6 +3,7 @@ add_library(engine STATIC
     src/Renderer.cpp
     src/Entity.cpp
     src/EntityManager.cpp
+    src/GameObjectManager.cpp
     src/Physics.cpp
     src/Input.cpp
     src/Collision.cpp
