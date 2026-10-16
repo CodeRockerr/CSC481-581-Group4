@@ -89,3 +89,15 @@ target_include_directories(object_systems_test PRIVATE
 target_link_libraries(object_systems_test PRIVATE
     engine
 )
+
+add_executable(camera_test
+    CameraTest.cpp
+)
+
+target_include_directories(camera_test PRIVATE
+    Engine/include
+)
+
+target_link_libraries(camera_test PRIVATE
+    engine
+)
