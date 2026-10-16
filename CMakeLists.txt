@@ -65,3 +65,15 @@ target_link_libraries(network_test PRIVATE
     engine
     libzmq
 )
+
+add_executable(object_model_test
+    ObjectModelTest.cpp
+)
+
+target_include_directories(object_model_test PRIVATE
+    Engine/include
+)
+
+target_link_libraries(object_model_test PRIVATE
+    engine
+)
