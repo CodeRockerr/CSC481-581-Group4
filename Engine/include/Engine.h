@@ -13,6 +13,7 @@
 #include "Timeline.h"
 #include "FrameWorker.h"
 #include "RenderItem.h"
+#include "Camera.h"
 
 class Engine
 {
@@ -28,6 +29,7 @@ public:
     Physics &getPhysics() { return physics; }
     Renderer &getRenderer() { return renderer; }
     Window &getWindow() { return window; }
+    Camera &getCamera() { return camera; }
 
     Timeline &getGlobalTimeline() { return globalTimeline; }
     Timeline &getTimeline(int id) { return *timelines[id]; }
@@ -46,6 +48,7 @@ private:
     EntityManager entities;
     GameObjectManager objects;
     Physics physics;
+    Camera camera;
     Timeline globalTimeline;
     std::vector<std::unique_ptr<Timeline>> timelines;
     bool running = true;
