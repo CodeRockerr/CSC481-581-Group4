@@ -155,3 +155,5 @@ Filled in as each step lands.
 - Step 1: design note written (this file).
 - Step 2: API headers added (`Component.h`, `GameObject.h`, `GameObjectManager.h`, `Components.h`).
 - Step 3: `GameObjectManager.cpp` implemented; `object_model_test` covers create, createWithId, find, forEach, deferred destroy, and clear.
+- Step 4: Physics, movement, collision, render snapshots, and Engine loop dual-path on GameObjectManager; Entity path kept for games.
+- Step 5: Camera implemented (follow, dead zone, translate, bounds, worldToScreen); object draw path uses it. Yeva side-scroll can call Camera::translate.
