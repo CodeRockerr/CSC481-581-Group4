@@ -54,7 +54,7 @@ target_link_libraries(engine_server PRIVATE
 )
 
 add_executable(network_test
-    NetworkTest.cpp
+    Tests/NetworkTest.cpp
 )
 
 target_include_directories(network_test PRIVATE
@@ -67,7 +67,7 @@ target_link_libraries(network_test PRIVATE
 )
 
 add_executable(object_model_test
-    ObjectModelTest.cpp
+    Tests/ObjectModelTest.cpp
 )
 
 target_include_directories(object_model_test PRIVATE
@@ -79,7 +79,7 @@ target_link_libraries(object_model_test PRIVATE
 )
 
 add_executable(object_systems_test
-    ObjectSystemsTest.cpp
+    Tests/ObjectSystemsTest.cpp
 )
 
 target_include_directories(object_systems_test PRIVATE
@@ -91,7 +91,7 @@ target_link_libraries(object_systems_test PRIVATE
 )
 
 add_executable(camera_test
-    CameraTest.cpp
+    Tests/CameraTest.cpp
 )
 
 target_include_directories(camera_test PRIVATE
