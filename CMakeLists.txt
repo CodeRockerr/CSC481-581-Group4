@@ -1,6 +1,7 @@
 cmake_minimum_required(VERSION 3.16)
 
 project(CSC481-581-Group4)
+include(CTest)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -100,3 +101,22 @@ target_include_directories(camera_test PRIVATE
 target_link_libraries(camera_test PRIVATE
     engine
 )
+
+add_executable(gameplay_systems_test
+    Tests/GameplaySystemsTest.cpp
+)
+
+target_include_directories(gameplay_systems_test PRIVATE
+    Engine/include
+)
+
+target_link_libraries(gameplay_systems_test PRIVATE
+    engine
+)
+
+if(BUILD_TESTING)
+    add_test(NAME object_model_test COMMAND object_model_test)
+    add_test(NAME object_systems_test COMMAND object_systems_test)
+    add_test(NAME camera_test COMMAND camera_test)
+    add_test(NAME gameplay_systems_test COMMAND gameplay_systems_test)
+endif()
