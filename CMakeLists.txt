@@ -31,7 +31,6 @@ target_link_libraries(hello PRIVATE SDL3::SDL3)
 
 # --- Milestone 1 additions ---
 add_subdirectory(Engine)
-add_subdirectory(Demo)
 
 # Each teammate gets their own subfolder under Games/ with its own
 # CMakeLists.txt, so everyone's individual game builds as a separate
@@ -54,7 +53,7 @@ target_link_libraries(engine_server PRIVATE
 )
 
 add_executable(network_test
-    NetworkTest.cpp
+    Tests/NetworkTest.cpp
 )
 
 target_include_directories(network_test PRIVATE
@@ -64,4 +63,40 @@ target_include_directories(network_test PRIVATE
 target_link_libraries(network_test PRIVATE
     engine
     libzmq
+)
+
+add_executable(object_model_test
+    Tests/ObjectModelTest.cpp
+)
+
+target_include_directories(object_model_test PRIVATE
+    Engine/include
+)
+
+target_link_libraries(object_model_test PRIVATE
+    engine
+)
+
+add_executable(object_systems_test
+    Tests/ObjectSystemsTest.cpp
+)
+
+target_include_directories(object_systems_test PRIVATE
+    Engine/include
+)
+
+target_link_libraries(object_systems_test PRIVATE
+    engine
+)
+
+add_executable(camera_test
+    Tests/CameraTest.cpp
+)
+
+target_include_directories(camera_test PRIVATE
+    Engine/include
+)
+
+target_link_libraries(camera_test PRIVATE
+    engine
 )

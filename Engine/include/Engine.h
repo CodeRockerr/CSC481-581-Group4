@@ -6,11 +6,15 @@
 #include "Window.h"
 #include "Renderer.h"
 #include "EntityManager.h"
+#include "GameObjectManager.h"
 #include "Physics.h"
 #include "Input.h"
 #include "Collision.h"
 #include "Timeline.h"
 #include "FrameWorker.h"
+#include "RenderItem.h"
+#include "Camera.h"
+
 class Engine
 {
 public:
@@ -21,9 +25,11 @@ public:
     Engine(const std::string &title, int width = 1920, int height = 1080);
 
     EntityManager &getEntities() { return entities; }
+    GameObjectManager &getObjects() { return objects; }
     Physics &getPhysics() { return physics; }
     Renderer &getRenderer() { return renderer; }
     Window &getWindow() { return window; }
+    Camera &getCamera() { return camera; }
 
     Timeline &getGlobalTimeline() { return globalTimeline; }
     Timeline &getTimeline(int id) { return *timelines[id]; }
@@ -40,13 +46,16 @@ private:
     Window window;
     Renderer renderer;
     EntityManager entities;
+    GameObjectManager objects;
     Physics physics;
+    Camera camera;
     Timeline globalTimeline;
     std::vector<std::unique_ptr<Timeline>> timelines;
     bool running = true;
 
     std::function<void(float)> worldCallback;
     std::vector<Entity> finishedFrame;
+    std::vector<RenderItem> finishedObjectFrame;
     std::unique_ptr<FrameWorker> playerWorker;
     std::unique_ptr<FrameWorker> worldWorker;
 

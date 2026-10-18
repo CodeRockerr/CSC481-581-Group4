@@ -4,11 +4,7 @@
 #include <SDL3/SDL.h>
 #include "Entity.h"
 
-enum class ScaleMode
-{
-    Pixel,
-    Percentage
-};
+#include "ScaleMode.h"
 
 class EntityManager
 {
