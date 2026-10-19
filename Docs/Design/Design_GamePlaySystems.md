@@ -10,7 +10,7 @@ The gameplay systems provide reusable engine components for moving objects, defi
 - **Vertical:** moves an object back and forth along the Y axis.
 - **Circular:** moves an object around its initial position.
 
-The component stores the movement type, speed, distance, and initial position. `GameplaySystems::updateMovementPaths` advances the movement using delta time.
+The component stores the movement type, speed, distance, and initial position. `speed` is an angular rate in **radians per second**; `distance` is the amplitude (horizontal/vertical) or radius (circular). Circular paths offset their center so the object does not jump on the first tick. `GameplaySystems::updateMovementPaths` advances the movement using delta time.
 
 Example:
 
@@ -35,9 +35,9 @@ A death-zone object uses:
 - `Collider` configured as a trigger.
 - `DeathZone` to identify the destination spawn point.
 
-`GameplaySystems::updateDeathZones` checks collisions using `Collision::checkCollision`. When the player collides with a death zone and the named spawn point exists, the player's transform is moved to the spawn location. If the player has a `PhysicsBody`, its horizontal and vertical velocities are reset to zero.
+`GameplaySystems::updateDeathZones` checks collisions using `Collision::checkCollision`. When the player **enters** a death zone and the named spawn point exists, the player's transform is moved to the spawn location. If the player has a `PhysicsBody`, its horizontal and vertical velocities are reset to zero. Respawn is edge-triggered (`DeathZone::armed`) so overlapping the zone does not teleport every frame; the zone re-arms after the player leaves.
 
-Death zones do not require a visible sprite.
+Death zones do not require a visible sprite. Spawn points should not overlap the death zone that teleports to them.
 
 ## Side-Scroll Triggers
 
@@ -45,4 +45,6 @@ A side-scroll trigger uses a `Transform`, a trigger `Collider`, and a `SideScrol
 
 ## Integration and Testing
 
-The game or engine integration layer is responsible for calling the gameplay update methods with the appropriate world delta time, object manager, player ID, and camera. Gameplay tests should verify horizontal, vertical, and circular movement; named-spawn respawning and velocity reset; and camera translation when a trigger activates. These systems must use the shared `GameObject`, `Transform`, `Collider`, `PhysicsBody`, and `Camera` APIs rather than relying on the legacy `Entity` system.
+These systems are **not** wired into `Engine::run` automatically. The game or engine integration layer must call `GameplaySystems::updateMovementPaths`, `updateDeathZones`, and `updateSideScrollTriggers` each frame with the world delta time, object manager, player ID, and camera. See `Docs/Design/GamePlaySystemsUsage.md`.
+
+Gameplay tests verify horizontal, vertical, and circular movement (including no circular first-frame jump); named-spawn respawning and velocity reset; death-zone edge triggering; and camera translation when a trigger activates. These systems must use the shared `GameObject`, `Transform`, `Collider`, `PhysicsBody`, and `Camera` APIs rather than relying on the legacy `Entity` system.

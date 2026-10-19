@@ -1,8 +1,10 @@
-
 # Shared Gameplay Systems Usage
 
 These reusable components are part of the shared Engine. They use
 GameObject, Transform, Collider, PhysicsBody, and Camera directly.
+
+**Important:** these systems are not called automatically from `Engine::run`.
+Each game (or demo) must call the update functions below every frame.
 
 ## Creating gameplay objects
 
@@ -13,6 +15,7 @@ checkpoint.add<Transform>(100.0f, 200.0f, 10.0f, 10.0f);
 checkpoint.add<SpawnPoint>("checkpoint");
 
 // A horizontally moving platform.
+// MovementPath speed is radians/second; distance is amplitude in world units.
 GameObject& platform = objects.create("moving-platform");
 platform.add<Transform>(200.0f, 300.0f, 80.0f, 10.0f);
 platform.add<MovementPath>(
@@ -34,18 +37,26 @@ cameraTrigger.add<SideScrollTrigger>(640.0f, 0.0f);
 ## Updating gameplay
 
 Call these from the existing game update loop, using the real player ID
-and frame delta time.
+and world-frame delta time (for example inside `engine.run`'s gameUpdate
+or worldUpdate callback):
 
 ```cpp
 GameplaySystems::updateMovementPaths(objects, deltaTime);
 GameplaySystems::updateDeathZones(objects, playerId);
 GameplaySystems::updateSideScrollTriggers(
-    objects, camera, playerId);
+    objects, engine.getCamera(), playerId);
 ```
 
 The player needs a Transform and Collider for death-zone and camera-trigger
 collision checks. If the player has a PhysicsBody, its velocity is reset
 when it respawns.
+
+Death zones are edge-triggered: they fire once when the player enters, then
+re-arm after the player leaves the zone. Place spawn points outside death
+zones so the player is not soft-locked.
+
+Side-scroll triggers fire once (`activated` stays true). Reset
+`SideScrollTrigger::activated` if a level needs the trigger again.
 
 ## Spawn-point lookup
 

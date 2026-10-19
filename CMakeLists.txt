@@ -103,7 +103,7 @@ target_link_libraries(camera_test PRIVATE
 )
 
 add_executable(gameplay_systems_test
-    Tests/GameplaySystemsTest.cpp
+    Tests/GamePlaySystemsTest.cpp
 )
 
 target_include_directories(gameplay_systems_test PRIVATE

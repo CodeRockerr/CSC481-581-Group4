@@ -1,4 +1,3 @@
-
 #pragma once
 
 #include "Component.h"
@@ -10,12 +9,15 @@ enum class MovementPathType
     Circular
 };
 
+// Patterned motion for platforms and other movers.
+// speed is angular rate in radians per second.
+// distance is the amplitude (H/V) or radius (Circular) in world units.
 class MovementPath : public Component
 {
 public:
     MovementPath(
         MovementPathType pathType = MovementPathType::Horizontal,
-        float speed = 100.0f,
+        float speed = 1.0f,
         float distance = 100.0f)
         : type(pathType), speed(speed), distance(distance)
     {

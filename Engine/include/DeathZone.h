@@ -1,4 +1,3 @@
-
 #pragma once
 
 #include "Component.h"
@@ -15,4 +14,7 @@ public:
     }
 
     std::string spawnPointName;
+
+    // Edge-triggered: fires once on enter, re-arms after the player leaves.
+    bool armed = true;
 };

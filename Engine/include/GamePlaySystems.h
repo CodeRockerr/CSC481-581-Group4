@@ -1,4 +1,3 @@
-
 #pragma once
 
 #include <cstddef>
@@ -13,28 +12,28 @@ class GameplaySystems
 {
 public:
     // Spawn-point lookup. Index is zero-based.
-    static GameObject* findSpawnPointById(
-        GameObjectManager& objects,
+    static GameObject *findSpawnPointById(
+        GameObjectManager &objects,
         std::uint32_t objectId);
 
-    static GameObject* findSpawnPointByName(
-        GameObjectManager& objects,
-        const std::string& name);
+    static GameObject *findSpawnPointByName(
+        GameObjectManager &objects,
+        const std::string &name);
 
-    static GameObject* findSpawnPointByIndex(
-        GameObjectManager& objects,
+    static GameObject *findSpawnPointByIndex(
+        GameObjectManager &objects,
         std::size_t index);
 
     static void updateMovementPaths(
-        GameObjectManager& objects,
+        GameObjectManager &objects,
         float deltaTime);
 
     static void updateDeathZones(
-        GameObjectManager& objects,
-        unsigned int playerId);
+        GameObjectManager &objects,
+        std::uint32_t playerId);
 
     static void updateSideScrollTriggers(
-        GameObjectManager& objects,
-        Camera& camera,
-        unsigned int playerId);
+        GameObjectManager &objects,
+        Camera &camera,
+        std::uint32_t playerId);
 };

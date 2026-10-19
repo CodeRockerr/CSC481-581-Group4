@@ -1,4 +1,3 @@
-
 #include "GamePlaySystems.h"
 
 #include "Camera.h"
@@ -16,11 +15,11 @@
 #include <cstdint>
 #include <string>
 
-GameObject* GameplaySystems::findSpawnPointById(
-    GameObjectManager& objects,
+GameObject *GameplaySystems::findSpawnPointById(
+    GameObjectManager &objects,
     std::uint32_t objectId)
 {
-    GameObject* point = objects.find(objectId);
+    GameObject *point = objects.find(objectId);
 
     if (!point ||
         !point->active ||
@@ -33,14 +32,14 @@ GameObject* GameplaySystems::findSpawnPointById(
     return point;
 }
 
-GameObject* GameplaySystems::findSpawnPointByName(
-    GameObjectManager& objects,
-    const std::string& name)
+GameObject *GameplaySystems::findSpawnPointByName(
+    GameObjectManager &objects,
+    const std::string &name)
 {
-    GameObject* result = nullptr;
+    GameObject *result = nullptr;
 
     objects.forEach<Transform, SpawnPoint>(
-        [&](GameObject& object, Transform&, SpawnPoint& spawn)
+        [&](GameObject &object, Transform &, SpawnPoint &spawn)
         {
             if (!result && spawn.name == name)
             {
@@ -51,15 +50,15 @@ GameObject* GameplaySystems::findSpawnPointByName(
     return result;
 }
 
-GameObject* GameplaySystems::findSpawnPointByIndex(
-    GameObjectManager& objects,
+GameObject *GameplaySystems::findSpawnPointByIndex(
+    GameObjectManager &objects,
     std::size_t index)
 {
-    GameObject* result = nullptr;
+    GameObject *result = nullptr;
     std::size_t currentIndex = 0;
 
     objects.forEach<Transform, SpawnPoint>(
-        [&](GameObject& object, Transform&, SpawnPoint&)
+        [&](GameObject &object, Transform &, SpawnPoint &)
         {
             if (!result && currentIndex == index)
             {
@@ -73,7 +72,7 @@ GameObject* GameplaySystems::findSpawnPointByIndex(
 }
 
 void GameplaySystems::updateMovementPaths(
-    GameObjectManager& objects,
+    GameObjectManager &objects,
     float deltaTime)
 {
     if (deltaTime <= 0.0f)
@@ -82,14 +81,26 @@ void GameplaySystems::updateMovementPaths(
     }
 
     objects.forEach<Transform, MovementPath>(
-        [&](GameObject&, Transform& transform, MovementPath& path)
+        [&](GameObject &, Transform &transform, MovementPath &path)
         {
             if (!path.initialized)
             {
                 path.startX = transform.x;
                 path.startY = transform.y;
-                path.centerX = transform.x;
-                path.centerY = transform.y;
+
+                // Circular uses cos/sin around a center. Offset the center so
+                // angle 0 keeps the object at its authored start position.
+                if (path.type == MovementPathType::Circular)
+                {
+                    path.centerX = transform.x - path.distance;
+                    path.centerY = transform.y;
+                }
+                else
+                {
+                    path.centerX = transform.x;
+                    path.centerY = transform.y;
+                }
+
                 path.initialized = true;
             }
 
@@ -99,36 +110,27 @@ void GameplaySystems::updateMovementPaths(
 
             switch (path.type)
             {
-                case MovementPathType::Horizontal:
-                    transform.x =
-                        path.startX +
-                        std::sin(angle) * path.distance;
-                    break;
+            case MovementPathType::Horizontal:
+                transform.x = path.startX + std::sin(angle) * path.distance;
+                break;
 
-                case MovementPathType::Vertical:
-                    transform.y =
-                        path.startY +
-                        std::sin(angle) * path.distance;
-                    break;
+            case MovementPathType::Vertical:
+                transform.y = path.startY + std::sin(angle) * path.distance;
+                break;
 
-                case MovementPathType::Circular:
-                    transform.x =
-                        path.centerX +
-                        std::cos(angle) * path.distance;
-
-                    transform.y =
-                        path.centerY +
-                        std::sin(angle) * path.distance;
-                    break;
+            case MovementPathType::Circular:
+                transform.x = path.centerX + std::cos(angle) * path.distance;
+                transform.y = path.centerY + std::sin(angle) * path.distance;
+                break;
             }
         });
 }
 
 void GameplaySystems::updateDeathZones(
-    GameObjectManager& objects,
-    unsigned int playerId)
+    GameObjectManager &objects,
+    std::uint32_t playerId)
 {
-    GameObject* player = objects.find(playerId);
+    GameObject *player = objects.find(playerId);
 
     if (!player ||
         !player->active ||
@@ -139,18 +141,24 @@ void GameplaySystems::updateDeathZones(
     }
 
     objects.forEach<Transform, DeathZone, Collider>(
-        [&](GameObject& zone,
-            Transform&,
-            DeathZone& deathZone,
-            Collider&)
+        [&](GameObject &zone,
+            Transform &,
+            DeathZone &deathZone,
+            Collider &)
         {
             if (!player->active ||
                 !Collision::checkCollision(*player, zone))
             {
+                deathZone.armed = true;
                 return;
             }
 
-            GameObject* spawn =
+            if (!deathZone.armed)
+            {
+                return;
+            }
+
+            GameObject *spawn =
                 GameplaySystems::findSpawnPointByName(
                     objects, deathZone.spawnPointName);
 
@@ -159,8 +167,8 @@ void GameplaySystems::updateDeathZones(
                 return;
             }
 
-            Transform* spawnTransform = spawn->get<Transform>();
-            Transform* playerTransform = player->get<Transform>();
+            Transform *spawnTransform = spawn->get<Transform>();
+            Transform *playerTransform = player->get<Transform>();
 
             if (!spawnTransform || !playerTransform)
             {
@@ -170,20 +178,22 @@ void GameplaySystems::updateDeathZones(
             playerTransform->x = spawnTransform->x;
             playerTransform->y = spawnTransform->y;
 
-            if (PhysicsBody* body = player->get<PhysicsBody>())
+            if (PhysicsBody *body = player->get<PhysicsBody>())
             {
                 body->velocityX = 0.0f;
                 body->velocityY = 0.0f;
             }
+
+            deathZone.armed = false;
         });
 }
 
 void GameplaySystems::updateSideScrollTriggers(
-    GameObjectManager& objects,
-    Camera& camera,
-    unsigned int playerId)
+    GameObjectManager &objects,
+    Camera &camera,
+    std::uint32_t playerId)
 {
-    GameObject* player = objects.find(playerId);
+    GameObject *player = objects.find(playerId);
 
     if (!player ||
         !player->active ||
@@ -194,10 +204,10 @@ void GameplaySystems::updateSideScrollTriggers(
     }
 
     objects.forEach<Transform, SideScrollTrigger, Collider>(
-        [&](GameObject& triggerObject,
-            Transform&,
-            SideScrollTrigger& trigger,
-            Collider&)
+        [&](GameObject &triggerObject,
+            Transform &,
+            SideScrollTrigger &trigger,
+            Collider &)
         {
             if (trigger.activated)
             {
