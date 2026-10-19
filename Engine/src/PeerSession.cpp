@@ -1,18 +1,19 @@
 #include "PeerSession.h"
 
-#include <chrono>
 #include <cerrno>
+#include <chrono>
 #include <iostream>
-#include <thread>
 #include <stdexcept>
+#include <thread>
 
 namespace
 {
     constexpr int kTimeoutMs = 300;
 }
 
-PeerSession::PeerSession(uint16_t port)
-    : bindPort(port), anchor(peerNowTic()), running(true), context(zmq_ctx_new()), acceptSocket(nullptr)
+PeerSession::PeerSession(uint16_t port, WireFormat wireFormat)
+    : bindPort(port), format(wireFormat), anchor(peerNowTic()), running(true), context(zmq_ctx_new()),
+      acceptSocket(nullptr)
 {
     if (context == nullptr)
     {
@@ -21,7 +22,7 @@ PeerSession::PeerSession(uint16_t port)
     acceptSocket = zmq_socket(context, ZMQ_REP);
     if (acceptSocket == nullptr)
     {
-        throw std::runtime_error("Failed to create peer scoket");
+        throw std::runtime_error("Failed to create peer socket");
     }
 
     setSocketOptions(acceptSocket);
@@ -31,6 +32,7 @@ PeerSession::PeerSession(uint16_t port)
         throw std::runtime_error("Failed to bind peer port");
     }
 
+    replicator.setLocalOwner(bindPort);
     acceptThread = std::thread(&PeerSession::acceptLoop, this);
 }
 
@@ -69,6 +71,7 @@ PeerSession::~PeerSession()
 
 void PeerSession::connectTo(const std::string &host, uint16_t port)
 {
+    // Only the lower port dials, so each pair has exactly one connection.
     if (port <= bindPort)
     {
         return;
@@ -77,25 +80,15 @@ void PeerSession::connectTo(const std::string &host, uint16_t port)
     peerThreads.emplace_back(&PeerSession::dialPeer, this, host, port);
 }
 
-void PeerSession::sendPlayerState(const NetMessage &message)
+void PeerSession::publish(const GameObjectManager &objects)
 {
-    std::lock_guard<std::mutex> lock(stateMutex);
-    localPlayer = message;
-    localPlayer.type = NetMessageType::PlayerState;
-    localPlayer.clientId = bindPort;
-    hasLocalPlayer = true;
+    replicator.publish(objects);
 }
 
-std::vector<NetMessage> PeerSession::getRemotePlayers() const
+std::size_t PeerSession::sync(GameObjectManager &objects, const NetReplicator::SpawnFn &onSpawn,
+                              const NetReplicator::DespawnFn &onDespawn)
 {
-    std::lock_guard<std::mutex> lock(stateMutex);
-    std::vector<NetMessage> players;
-    players.reserve(remotePlayers.size());
-    for (const auto &entry : remotePlayers)
-    {
-        players.push_back(entry.second);
-    }
-    return players;
+    return replicator.sync(objects, onSpawn, onDespawn);
 }
 
 int64_t PeerSession::getAnchor() const
@@ -121,44 +114,6 @@ void PeerSession::noteAnchor(int64_t tic)
     }
 }
 
-void PeerSession::rememberPlayer(const NetMessage &message)
-{
-    if (message.clientId == 0)
-    {
-        return;
-    }
-    std::lock_guard<std::mutex> lock(stateMutex);
-    const auto found = remotePlayers.find(message.clientId);
-    if (found != remotePlayers.end() && message.tic < found->second.tic)
-    {
-        return;
-    }
-    remotePlayers[message.clientId] = message;
-}
-
-void PeerSession::forgetPlayer(uint32_t clientId)
-{
-    if (clientId == 0)
-    {
-        return;
-    }
-    std::lock_guard<std::mutex> lock(stateMutex);
-    remotePlayers.erase(clientId);
-}
-
-NetMessage PeerSession::currentPlayer() const
-{
-    std::lock_guard<std::mutex> lock(stateMutex);
-    if (!hasLocalPlayer)
-    {
-        NetMessage empty{};
-        empty.type = NetMessageType::PlayerState;
-        empty.clientId = 0;
-        return empty;
-    }
-    return localPlayer;
-}
-
 void PeerSession::setSocketOptions(void *socket)
 {
     const int timeout = kTimeoutMs;
@@ -178,88 +133,47 @@ uint16_t PeerSession::readBoundPort(void *socket) const
     return static_cast<uint16_t>(std::stoi(text.substr(colon + 1)));
 }
 
-bool PeerSession::sendOne(void *socket, const NetMessage &message, int flags)
+bool PeerSession::sendPacket(void *socket, const Packet &packet)
 {
-    return zmq_send(socket, &message, sizeof(message), flags) != -1;
+    const std::string bytes = NetProtocol::encode(format, packet);
+    return zmq_send(socket, bytes.data(), bytes.size(), 0) != -1;
 }
 
-bool PeerSession::sendPair(void *socket)
+bool PeerSession::receivePacket(void *socket, Packet &packet, bool &timedOut)
 {
-    NetMessage anchorMessage{};
-    anchorMessage.type = NetMessageType::PlatformState;
-    anchorMessage.clientId = bindPort;
-    anchorMessage.tic = anchor.load();
-    return sendOne(socket, anchorMessage, ZMQ_SNDMORE) && sendOne(socket, currentPlayer(), 0);
-}
-
-bool PeerSession::recvAll(void *socket, std::vector<NetMessage> &messages, bool &timedOut)
-{
-    messages.clear();
     timedOut = false;
-    while (true)
+    zmq_msg_t message;
+    zmq_msg_init(&message);
+    const int received = zmq_msg_recv(&message, socket, 0);
+    if (received == -1)
     {
-        NetMessage message{};
-        const int received = zmq_recv(socket, &message, sizeof(NetMessage), 0);
-        if (received == -1)
-        {
-            timedOut = messages.empty() && errno == EAGAIN;
-            return false;
-        }
-        if (received != sizeof(NetMessage))
-        {
-            return false;
-        }
-        messages.push_back(message);
-        int more = 0;
-        size_t moreSize = sizeof(more);
-        zmq_getsockopt(socket, ZMQ_RCVMORE, &more, &moreSize);
-        if (!more)
-        {
-            return true;
-        }
-    }
-}
-
-void PeerSession::applyIncoming(const std::vector<NetMessage> &messages)
-{
-    for (const NetMessage &message : messages)
-    {
-        if (message.type == NetMessageType::PlatformState)
-        {
-            noteAnchor(message.tic);
-        }
-        else if (message.type == NetMessageType::PlayerState)
-        {
-            rememberPlayer(message);
-        }
-    }
-}
-
-bool PeerSession::exchange(void *socket, bool replyFirst)
-{
-    bool timedOut = false;
-    std::vector<NetMessage> incoming;
-
-    if (replyFirst)
-    {
-        if (!recvAll(socket, incoming, timedOut))
-        {
-            return false;
-        }
-        applyIncoming(incoming);
-        return sendPair(socket);
-    }
-
-    if (!sendPair(socket))
-    {
+        timedOut = errno == EAGAIN;
+        zmq_msg_close(&message);
         return false;
     }
-    if (!recvAll(socket, incoming, timedOut))
+    const bool ok = NetProtocol::decode(zmq_msg_data(&message), zmq_msg_size(&message), packet);
+    zmq_msg_close(&message);
+    return ok;
+}
+
+Packet PeerSession::statePacket()
+{
+    Packet packet;
+    packet.type = PacketType::State;
+    packet.sender = bindPort;
+    packet.tic = anchor.load();
+    packet.objects = replicator.takeOutgoing();
+    return packet;
+}
+
+void PeerSession::applyIncoming(const Packet &packet)
+{
+    if (packet.type != PacketType::State || packet.sender == 0)
     {
-        return false;
+        return;
     }
-    applyIncoming(incoming);
-    return true;
+    noteAnchor(packet.tic);
+    replicator.replaceOwner(packet.sender, packet.objects);
 }
 
 void PeerSession::servePeer(void *socket)
@@ -269,39 +183,39 @@ void PeerSession::servePeer(void *socket)
     while (running)
     {
         bool timedOut = false;
-        std::vector<NetMessage> incoming;
-        if (!recvAll(socket, incoming, timedOut))
+        Packet incoming;
+        if (!receivePacket(socket, incoming, timedOut))
         {
             if (timedOut)
             {
                 continue;
             }
-            NetMessage error{};
-            error.type = NetMessageType::Leave;
-            sendOne(socket, error, 0);
+            Packet error;
+            error.type = PacketType::Leave;
+            sendPacket(socket, error);
             break;
         }
-        for (const NetMessage &message : incoming)
+        if (incoming.type == PacketType::Leave)
         {
-            if (message.type == NetMessageType::PlayerState && message.clientId != 0)
-            {
-                remoteId = message.clientId;
-            }
-        }
-        if (!incoming.empty() && incoming.front().type == NetMessageType::Leave)
-        {
-            NetMessage reply{};
-            reply.type = NetMessageType::Leave;
-            sendOne(socket, reply, 0);
+            Packet reply;
+            reply.type = PacketType::Leave;
+            sendPacket(socket, reply);
             break;
+        }
+        if (incoming.sender != 0)
+        {
+            remoteId = incoming.sender;
         }
         applyIncoming(incoming);
-        if (!sendPair(socket))
+        if (!sendPacket(socket, statePacket()))
         {
             break;
         }
     }
-    forgetPlayer(remoteId);
+    if (remoteId != 0)
+    {
+        replicator.forgetOwner(remoteId);
+    }
     zmq_close(socket);
 }
 
@@ -309,22 +223,24 @@ void PeerSession::acceptLoop()
 {
     while (running)
     {
-        NetMessage request{};
-        const int received = zmq_recv(acceptSocket, &request, sizeof(NetMessage), 0);
-        if (received == -1)
+        bool timedOut = false;
+        Packet request;
+        if (!receivePacket(acceptSocket, request, timedOut))
         {
+            if (timedOut)
+            {
+                continue;
+            }
+            Packet reject;
+            reject.type = PacketType::Leave;
+            sendPacket(acceptSocket, reject);
             continue;
         }
-
-        auto reject = [&]()
+        if (request.type != PacketType::Join)
         {
-            NetMessage reply{};
-            reply.type = NetMessageType::Leave;
-            sendOne(acceptSocket, reply, 0);
-        };
-        if (received != sizeof(NetMessage) || request.type != NetMessageType::Join)
-        {
-            reject();
+            Packet reject;
+            reject.type = PacketType::Leave;
+            sendPacket(acceptSocket, reject);
             continue;
         }
 
@@ -336,16 +252,18 @@ void PeerSession::acceptLoop()
             {
                 zmq_close(dedicated);
             }
-            reject();
+            Packet reject;
+            reject.type = PacketType::Leave;
+            sendPacket(acceptSocket, reject);
             continue;
         }
 
-        NetMessage reply{};
-        reply.type = NetMessageType::Join;
-        reply.clientId = bindPort;
+        Packet reply;
+        reply.type = PacketType::JoinAccept;
+        reply.sender = bindPort;
         reply.tic = anchor.load();
-        reply.x = static_cast<float>(readBoundPort(dedicated));
-        sendOne(acceptSocket, reply, 0);
+        reply.aux = readBoundPort(dedicated);
+        sendPacket(acceptSocket, reply);
 
         std::lock_guard<std::mutex> lock(threadMutex);
         peerThreads.emplace_back(&PeerSession::servePeer, this, dedicated);
@@ -369,24 +287,24 @@ void PeerSession::dialPeer(std::string host, uint16_t port)
             std::this_thread::sleep_for(std::chrono::milliseconds(200));
             continue;
         }
-        NetMessage join{};
-        join.type = NetMessageType::Join;
-        join.clientId = bindPort;
+
+        Packet join;
+        join.type = PacketType::Join;
+        join.sender = bindPort;
         join.tic = anchor.load();
 
-        NetMessage reply{};
-        const bool sent = sendOne(joinSocket, join, 0);
-        const int received = sent ? zmq_recv(joinSocket, &reply, sizeof(NetMessage), 0) : -1;
+        Packet reply;
+        bool timedOut = false;
+        const bool ok = sendPacket(joinSocket, join) && receivePacket(joinSocket, reply, timedOut);
         zmq_close(joinSocket);
-        if (received != sizeof(NetMessage) || reply.type != NetMessageType::Join)
+        if (!ok || reply.type != PacketType::JoinAccept)
         {
             std::this_thread::sleep_for(std::chrono::milliseconds(200));
             continue;
         }
 
         noteAnchor(reply.tic);
-        const std::string gameEndpoint = "tcp://" + host + ":" + std::to_string(static_cast<uint16_t>(reply.x));
-
+        const std::string gameEndpoint = "tcp://" + host + ":" + std::to_string(reply.aux);
         void *socket = zmq_socket(context, ZMQ_REQ);
         if (socket == nullptr)
         {
@@ -400,15 +318,59 @@ void PeerSession::dialPeer(std::string host, uint16_t port)
             continue;
         }
 
-        while (running && exchange(socket, false))
+        while (running)
         {
+            Packet incoming;
+            if (!sendPacket(socket, statePacket()) || !receivePacket(socket, incoming, timedOut))
+            {
+                break;
+            }
+            applyIncoming(incoming);
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
         }
 
-        forgetPlayer(port);
+        replicator.forgetOwner(port);
         zmq_close(socket);
         if (running)
         {
             std::this_thread::sleep_for(std::chrono::milliseconds(200));
         }
     }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Legacy NetMessage view (Milestone 2 API). Remove once all games use publish()/sync().
+
+void PeerSession::sendPlayerState(const NetMessage &message)
+{
+    ObjectState state;
+    state.netId = 1;
+    state.kind = NetKind::Player;
+    state.x = message.x;
+    state.y = message.y;
+    state.velocityX = message.velocityX;
+    state.velocityY = message.velocityY;
+    replicator.setOutgoing({state});
+}
+
+std::vector<NetMessage> PeerSession::getRemotePlayers() const
+{
+    std::vector<NetMessage> players;
+    for (const ObjectState &state : replicator.remoteStates())
+    {
+        if (state.kind != NetKind::Player)
+        {
+            continue;
+        }
+        NetMessage message{};
+        message.type = NetMessageType::PlayerState;
+        message.clientId = state.owner;
+        message.tic = peerNowTic();
+        message.x = state.x;
+        message.y = state.y;
+        message.velocityX = state.velocityX;
+        message.velocityY = state.velocityY;
+        players.push_back(message);
+    }
+    return players;
 }
