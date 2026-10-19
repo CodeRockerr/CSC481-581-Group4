@@ -102,6 +102,29 @@ target_link_libraries(camera_test PRIVATE
     engine
 )
 
+# --- Milestone 3 networking ---
+add_executable(net_sync_test
+    Tests/NetSyncTest.cpp
+    Engine/src/Server.cpp
+)
+
+target_include_directories(net_sync_test PRIVATE
+    Engine/include
+)
+
+target_link_libraries(net_sync_test PRIVATE
+    engine
+)
+
+# Headless client used by the Part 1C performance experiments.
+add_executable(net_bench_client
+    Tests/NetBenchClient.cpp
+)
+
+target_link_libraries(net_bench_client PRIVATE
+    engine
+)
+
 add_executable(gameplay_systems_test
     Tests/GamePlaySystemsTest.cpp
 )
@@ -119,4 +142,5 @@ if(BUILD_TESTING)
     add_test(NAME object_systems_test COMMAND object_systems_test)
     add_test(NAME camera_test COMMAND camera_test)
     add_test(NAME gameplay_systems_test COMMAND gameplay_systems_test)
+    add_test(NAME net_sync_test COMMAND net_sync_test)
 endif()
