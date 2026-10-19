@@ -12,6 +12,8 @@ add_library(engine STATIC
     src/Image.cpp
     src/Timeline.cpp
     src/FrameWorker.cpp
+    src/NetProtocol.cpp
+    src/NetReplicator.cpp
     src/NetworkClient.cpp
     src/PeerSession.cpp
     src/GamePlaySystems.cpp
