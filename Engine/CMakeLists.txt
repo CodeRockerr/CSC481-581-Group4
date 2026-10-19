@@ -14,6 +14,7 @@ add_library(engine STATIC
     src/FrameWorker.cpp
     src/NetworkClient.cpp
     src/PeerSession.cpp
+    src/GamePlaySystems.cpp
 )
 
 target_include_directories(engine PUBLIC include PRIVATE ../vendored/SDL/src/video)
