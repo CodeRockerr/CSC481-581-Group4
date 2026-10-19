@@ -1,4 +1,7 @@
 #pragma once
+// DEPRECATED (Milestone 2). The wire format is now NetProtocol.h (ObjectState packets).
+// This struct survives only as the legacy view returned by NetworkClient::getLatestMessages()
+// and PeerSession::getRemotePlayers() so games not yet moved to GameObjects keep building.
 #include <cstdint>
 
 #pragma pack(push, 1)
