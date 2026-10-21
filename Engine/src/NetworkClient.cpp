@@ -214,8 +214,6 @@ void NetworkClient::networkLoop()
 
     while (running && !leaveRequested)
     {
-        // One exchange per interval. It doubles as a heartbeat: the client sends even when the
-        // game published nothing new, so the server can tell a live client from a dead one.
         const auto since = std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now() - lastSend);
         if (since.count() < sendIntervalMs.load())
         {
@@ -229,7 +227,6 @@ void NetworkClient::networkLoop()
 
         if (!exchange(request, reply))
         {
-            // REQ sockets are stuck after a timeout; open a fresh one and try again.
             openGameSocket();
             continue;
         }
@@ -273,9 +270,6 @@ void NetworkClient::sendLeave()
         }
     }
 }
-
-// ---------------------------------------------------------------------------------------------
-// Legacy NetMessage view (Milestone 2 API). Remove once all games use publish()/sync().
 
 void NetworkClient::sendPlayerState(const NetMessage &message)
 {

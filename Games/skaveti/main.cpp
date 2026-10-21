@@ -1,25 +1,3 @@
-// Cave Ninja - Milestone 3 (Sai Sumedh Kaveti)
-//
-// Built on the component-based GameObject model and the shared gameplay systems:
-//   ninja             Transform, Sprite, Collider, PhysicsBody (PlayerTime), PlayerInput, NetworkIdentity
-//   static platform   Transform, Sprite (tinted), Collider, Ground
-//   moving platform   Transform, Sprite, Collider, Ground, MovementPath  - server-owned when networked
-//   shadow wisp       Transform, Sprite, Collider (trigger), Patrol
-//   spawn point       Transform, SpawnPoint                             - hidden (no Sprite)
-//   death zone        Transform, Collider (trigger), DeathZone          - hidden
-//   scroll boundary   Transform, Collider (trigger), ScrollBoundary     - hidden, moves the Camera
-//
-// Respawn rule: whatever kills the ninja (pit or wisp), it comes back at the last checkpoint
-// (spawn point) it reached.
-//
-// Usage:
-//   skaveti_game                                    offline
-//   skaveti_game --client HOST [PORT] [binary|text] client-server
-//   skaveti_game --p2p PORT [HOST:PORT ...]          peer-to-peer
-//
-// Keys: A/D or arrows move, W/Up/Space jump, P pause ninja time, 1/2/3 time scale,
-//       TAB pixel/percentage scaling, H show/hide hidden objects (debug view).
-
 #include "CaveLevel.h"
 #include "Components.h"
 #include "DeathZone.h"
@@ -129,7 +107,6 @@ int main(int argc, char *argv[])
         return 1;
     }
 
-    // ---------------------------------------------------------------- networking
     std::unique_ptr<NetworkClient> net;
     if (!options.host.empty())
     {
@@ -151,7 +128,6 @@ int main(int argc, char *argv[])
     }
     const uint32_t localOwner = net ? net->getClientId() : (peers ? peers->getOwnerId() : 0u);
 
-    // ---------------------------------------------------------------- engine
     Engine engine("Cave Ninja - Milestone 3", 1280, 720);
     GameObjectManager &objects = engine.getObjects();
     Camera &camera = engine.getCamera();
@@ -167,7 +143,6 @@ int main(int argc, char *argv[])
     SDL_Texture *playerTexture = loadTexture(renderer, "Games/skaveti/assets/player.png");
     SDL_Texture *wispTexture = loadTexture(renderer, "Games/skaveti/assets/shadow_wisp.png");
 
-    // Background: tiles across the whole world, every other tile mirrored so the seams match.
     for (float x = 0.0f; x < Cave::WorldWidth; x += Cave::ViewWidth)
     {
         GameObject &tile = objects.create("background");
@@ -177,7 +152,6 @@ int main(int argc, char *argv[])
         sprite.flipHorizontal = static_cast<int>(x / Cave::ViewWidth) % 2 == 1;
     }
 
-    // Static platforms.
     for (const Cave::StaticPlatformDef &def : Cave::StaticPlatforms)
     {
         GameObject &platform = objects.create("static-platform");
@@ -188,8 +162,6 @@ int main(int argc, char *argv[])
         platform.add<Cave::Ground>();
     }
 
-    // Moving platforms: built locally (with MovementPath) offline / in P2P; replicated from the
-    // server otherwise, where the server runs the MovementPath.
     auto dressMovingPlatform = [&](GameObject &platform, int index)
     {
         Sprite *sprite = platform.get<Sprite>();
@@ -197,7 +169,7 @@ int main(int argc, char *argv[])
             sprite = &platform.add<Sprite>();
         sprite->texture = platformTexture;
         sprite->frameCount = 1;
-        sprite->color = SDL_Color{255, 225, 140, 255}; // gold: moving platforms stand out
+        sprite->color = SDL_Color{255, 225, 140, 255};
         platform.add<Collider>(0.0f, 0.0f, Cave::PlatformTopPadding, 0.0f);
         platform.add<Cave::Ground>(index);
     };
@@ -216,17 +188,15 @@ int main(int argc, char *argv[])
         }
     }
 
-    // Shadow wisp patrolling the horizontal moving platform.
     const float wispSize = 115.0f;
     GameObject &wisp = objects.create("shadow-wisp");
     wisp.add<Transform>(0.0f, 0.0f, wispSize, wispSize);
     wisp.add<Sprite>(wispTexture).layer = 1;
     wisp.add<Collider>(0.20f, 0.20f, 0.15f, 0.15f, true);
     wisp.add<Cave::Patrol>(0);
-    wisp.active = false; // until its platform exists
+    wisp.active = false;
     const uint32_t wispId = wisp.getId();
 
-    // Hidden objects (shared engine components): spawn points, death zones, scroll triggers.
     for (const Cave::SpawnPointDef &def : Cave::SpawnPoints)
     {
         GameObject &spawn = objects.create("spawn-point");
@@ -238,7 +208,7 @@ int main(int argc, char *argv[])
         GameObject &zone = objects.create("death-zone");
         zone.add<Transform>(def.x, def.y, def.width, def.height);
         zone.add<Collider>(0.0f, 0.0f, 0.0f, 0.0f, true);
-        zone.add<DeathZone>(Cave::SpawnPoints[0].name); // updated to the latest checkpoint as you play
+        zone.add<DeathZone>(Cave::SpawnPoints[0].name);
     }
     GameObject &leftBoundary = objects.create("scroll-left");
     leftBoundary.add<Transform>(0.0f, -2000.0f, Cave::ScrollLeftEdge, 4000.0f);
@@ -251,7 +221,6 @@ int main(int argc, char *argv[])
     const uint32_t leftBoundaryId = leftBoundary.getId();
     const uint32_t rightBoundaryId = rightBoundary.getId();
 
-    // The ninja.
     const float playerSize = 1280.0f * 0.095f;
     const float moveSpeed = 1280.0f * 0.32f;
     const float jumpSpeed = 700.0f;
@@ -269,7 +238,6 @@ int main(int argc, char *argv[])
     }
     const uint32_t playerId = player.getId();
 
-    // Replicas from other endpoints get their look here.
     const NetReplicator::SpawnFn onSpawn = [&](GameObject &replica, const ObjectState &state)
     {
         if (state.kind == Cave::KindNinja)
@@ -278,7 +246,7 @@ int main(int argc, char *argv[])
             sprite->texture = playerTexture;
             sprite->frameCount = 4;
             sprite->layer = 1;
-            sprite->color = SDL_Color{200, 200, 255, 230}; // slightly tinted so you can tell yourself apart
+            sprite->color = SDL_Color{200, 200, 255, 230};
         }
         else if (state.kind == Cave::KindMovingPlatform)
         {
@@ -287,7 +255,6 @@ int main(int argc, char *argv[])
         }
     };
 
-    // ---------------------------------------------------------------- game state
     Timeline &playerTime = engine.getTimeline(Engine::PlayerTime);
     Timeline &globalTime = engine.getGlobalTimeline();
 
@@ -304,22 +271,19 @@ int main(int argc, char *argv[])
     int64_t lastTitleUpdate = 0;
     uint64_t framesSinceTitle = 0;
 
-    // Keep the hidden scroll boundaries pinned to the current view.
     auto pinBoundaries = [&]()
     {
         objects.find(leftBoundaryId)->get<Transform>()->x = camera.getX();
         objects.find(rightBoundaryId)->get<Transform>()->x = camera.getX() + Cave::ScrollRightEdge;
     };
 
-    // After a teleport the ninja can be far outside the view; put the camera back on it.
     auto snapCameraToPlayer = [&]()
     {
         const float x = objects.find(playerId)->get<Transform>()->x;
-        camera.setPosition(x - Cave::ScrollLeftEdge - 40.0f, 0.0f); // clamped to the world by the camera
+        camera.setPosition(x - Cave::ScrollLeftEdge - 40.0f, 0.0f);
         pinBoundaries();
     };
 
-    // Every death zone sends the ninja to the latest checkpoint.
     auto setCheckpoint = [&](int index)
     {
         checkpoint = index;
@@ -328,7 +292,6 @@ int main(int argc, char *argv[])
         SDL_Log("Checkpoint %s reached", Cave::SpawnPoints[index].name);
     };
 
-    // Common bookkeeping after the ninja was teleported to a spawn point.
     auto afterRespawn = [&]()
     {
         GameObject *ninja = objects.find(playerId);
@@ -340,8 +303,6 @@ int main(int argc, char *argv[])
         snapCameraToPlayer();
     };
 
-    // Teleport to a spawn point by name (used for the wisp and the below-the-world safety net;
-    // death zones teleport through GameplaySystems::updateDeathZones).
     auto respawnAt = [&](const std::string &name)
     {
         GameObject *spawn = GameplaySystems::findSpawnPointByName(objects, name);
@@ -384,16 +345,13 @@ int main(int argc, char *argv[])
         [&](float worldDelta)
         {
             const float playerDelta = static_cast<float>(playerTime.getLastDelta());
-            camera.setViewport(Cave::ViewWidth, Cave::ViewHeight); // world units, whatever the window size
+            camera.setViewport(Cave::ViewWidth, Cave::ViewHeight);
 
-            // 1. Receive: create / update / destroy replicas (remote ninjas, server platforms).
             if (net)
                 net->sync(objects, onSpawn);
             if (peers)
                 peers->sync(objects, onSpawn);
 
-            // 2. Locally driven moving platforms (shared MovementPath system). Peers align the path
-            //    clock to the shared anchor so every peer sees the same platform positions.
             if (!net)
             {
                 if (peers)
@@ -407,7 +365,6 @@ int main(int argc, char *argv[])
                 GameplaySystems::updateMovementPaths(objects, worldDelta);
             }
 
-            // 3. Track how far every surface moved this frame (to carry riders).
             std::unordered_map<uint32_t, SDL_FPoint> groundDelta;
             objects.forEach<Transform, Cave::Ground>([&](GameObject &g, Transform &t, Cave::Ground &)
                                                      {
@@ -416,7 +373,6 @@ int main(int argc, char *argv[])
                                                                      : SDL_FPoint{t.x - found->second.x, t.y - found->second.y};
                 lastGroundPos[g.getId()] = SDL_FPoint{t.x, t.y}; });
 
-            // 4. Wisp patrols its platform (derived from the platform, so it agrees on every client).
             if (GameObject *w = objects.find(wispId))
             {
                 bool placed = false;
@@ -442,7 +398,6 @@ int main(int argc, char *argv[])
             if (Input::isKeyJustPressed(SDL_SCANCODE_H))
                 toggleHiddenDebug();
 
-            // 5. The ninja.
             GameObject &ninja = *objects.find(playerId);
             Transform &t = *ninja.get<Transform>();
             PhysicsBody &body = *ninja.get<PhysicsBody>();
@@ -452,7 +407,6 @@ int main(int argc, char *argv[])
                 std::lock_guard<std::mutex> lock(ninja.getMutex());
                 const bool paused = playerTime.isPaused();
 
-                // Ride the surface we stand on.
                 if (grounded && ridingId != 0 && !paused && objects.find(ridingId) != nullptr)
                 {
                     const SDL_FPoint d = groundDelta[ridingId];
@@ -474,7 +428,6 @@ int main(int argc, char *argv[])
                     ridingId = 0;
                 }
 
-                // Landing: feet are the middle half of the sprite.
                 const SDL_FRect feet{t.x + t.width * 0.25f, t.y, t.width * 0.5f, t.height};
                 bool landed = false;
                 objects.forEach<Cave::Ground>([&](GameObject &g, Cave::Ground &)
@@ -482,7 +435,7 @@ int main(int argc, char *argv[])
                     if (landed)
                         return;
                     const SDL_FRect top = colliderBounds(g);
-                    const float rise = std::max(0.0f, -groundDelta[g.getId()].y); // surface moving up
+                    const float rise = std::max(0.0f, -groundDelta[g.getId()].y);
                     if (body.velocityY >= 0.0f && overlaps(feet, top) && lastFeetY <= top.y + 1.0f + rise)
                     {
                         t.y = top.y - t.height;
@@ -493,7 +446,6 @@ int main(int argc, char *argv[])
                     } });
                 if (!landed)
                 {
-                    // Still standing if the feet rest exactly on the surface we rode.
                     bool stillOn = false;
                     if (grounded && ridingId != 0)
                     {
@@ -511,7 +463,6 @@ int main(int argc, char *argv[])
                     }
                 }
 
-                // Animation: 0 idle, 1-3 run, 2 in the air.
                 const int runFrames[3] = {1, 2, 3};
                 if (!grounded)
                     sprite.frame = 2;
@@ -535,16 +486,12 @@ int main(int argc, char *argv[])
                 lastFeetY = t.y + t.height;
             }
 
-            // 6. Checkpoints: the furthest spawn point the ninja has walked past.
             for (int i = 0; i < Cave::SpawnPointCount; ++i)
             {
                 if (t.x >= Cave::SpawnPoints[i].x && i > checkpoint)
                     setCheckpoint(i);
             }
 
-            // 7. Deaths. Hidden death zones go through the shared system, which teleports the ninja
-            //    to the zone's designated spawn point (the latest checkpoint); we only need to notice
-            //    that it fired. The wisp and the safety net use the same checkpoint.
             std::vector<bool> wasArmed;
             objects.forEach<DeathZone>([&](GameObject &, DeathZone &dz)
                                        { wasArmed.push_back(dz.armed); });
@@ -567,13 +514,9 @@ int main(int argc, char *argv[])
             }
             else if (t.y > Cave::WorldHeight + 200.0f)
             {
-                // Safety net: should be impossible with the deep death zones, but never strand the player.
                 respawnAt(Cave::SpawnPoints[checkpoint].name);
             }
 
-            // 8. Side scrolling: past the right boundary -> camera moves right by the overshoot,
-            //    past the left boundary -> left. Compared by position (not just overlap), so it still
-            //    works if the ninja moved a long way in one frame.
             {
                 const SDL_FRect box = colliderBounds(ninja);
                 const SDL_FRect right = colliderBounds(*objects.find(rightBoundaryId));
@@ -585,13 +528,11 @@ int main(int argc, char *argv[])
                 pinBoundaries();
             }
 
-            // 9. Send what this endpoint owns.
             if (net)
                 net->publish(objects);
             if (peers)
                 peers->publish(objects);
 
-            // Window title: mode, ids, players, loop rate, network round trip.
             ++framesSinceTitle;
             const int64_t now = globalTime.getTime();
             if (now - lastTitleUpdate >= 250'000'000)

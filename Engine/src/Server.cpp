@@ -18,7 +18,6 @@ namespace
 
     using Clock = std::chrono::steady_clock;
 
-    // Receives one whole frame of any size. Returns -1 on error/timeout (errno set by 0MQ).
     int receiveFrame(void *socket, std::string &out)
     {
         zmq_msg_t message;
@@ -107,8 +106,6 @@ GameObject &Server::createObject(uint16_t kind, const std::string &name)
 
 void Server::installDefaultScene()
 {
-    // Milestone 2 behaviour, kept so games that still use the legacy NetMessage view work:
-    // one platform moving horizontally around x = 520 with amplitude 180 at y = 520.
     GameObject &platform = createObject(NetKind::Platform, "legacy-platform");
     platform.add<Transform>(520.0f, 520.0f, 0.0f, 0.0f);
     platform.add<PhysicsBody>(0, false);
@@ -150,7 +147,6 @@ void Server::simulationLoop()
                 sceneUpdate(objects, delta, elapsed);
             }
             // Mirror client-owned objects into the server's own object model so server-side
-            // logic (collisions, triggers) can see players.
             replicator.sync(objects);
             objects.flushDestroyed();
 
@@ -183,7 +179,7 @@ void Server::simulationLoop()
         }
         else
         {
-            next = after; // fell behind; do not try to catch up with a burst
+            next = after;
         }
     }
 }
@@ -198,8 +194,6 @@ void Server::buildSnapshot(Packet &out)
         std::lock_guard<std::mutex> lock(snapshotMutex);
         out.objects = serverStates;
     }
-    // Client objects come straight from the replicator so a client's newest state is relayed
-    // on the very next request instead of waiting for a simulation tick.
     std::vector<ObjectState> clients = replicator.remoteStates();
     out.objects.insert(out.objects.end(), clients.begin(), clients.end());
 }
@@ -258,7 +252,6 @@ void Server::clientLoop(uint32_t clientId, void *socket, std::shared_ptr<std::at
 
         if (incoming.type == PacketType::State)
         {
-            // Force ownership: a client can only update its own objects.
             for (ObjectState &state : incoming.objects)
             {
                 state.owner = clientId;

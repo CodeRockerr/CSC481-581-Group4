@@ -1,14 +1,4 @@
 #pragma once
-// Client side of the Milestone 3 client-server model.
-//
-// Game usage (main thread, inside the game update callback):
-//     net.publish(engine.getObjects());               // send objects this client owns
-//     net.sync(engine.getObjects(), onSpawn);         // create/update/destroy replicas
-// Mark an object as owned and replicated with:
-//     object.add<NetworkIdentity>(net.getClientId(), MyKinds::Ninja);
-//
-// A background thread does the 0MQ request/reply exchange so the game loop never blocks.
-// The wire format (binary or text) is chosen per client and only changes the representation.
 
 #include <atomic>
 #include <condition_variable>
@@ -40,34 +30,22 @@ public:
     uint32_t getClientId() const;
     WireFormat getFormat() const { return format; }
 
-    // ---- object model API (Milestone 3) ----
     void publish(const GameObjectManager &objects);
     std::size_t sync(GameObjectManager &objects, const NetReplicator::SpawnFn &onSpawn = nullptr,
                      const NetReplicator::DespawnFn &onDespawn = nullptr);
     NetReplicator &getReplicator() { return replicator; }
 
-    // Blocks until a snapshot newer than `seenSequence` arrives (or timeout). Returns the new
-    // sequence number, or `seenSequence` on timeout. Used by headless benchmarks.
     uint64_t waitForSnapshot(uint64_t seenSequence, int timeoutMs);
     uint64_t getSnapshotSequence() const { return snapshotSequence.load(); }
 
-    // Minimum time between requests. Default 16 ms (one per frame). 0 = back-to-back, used by
-    // the benchmark to measure raw exchange cost.
     void setSendIntervalMs(int ms) { sendIntervalMs = ms < 0 ? 0 : ms; }
 
-    // ---- statistics for the performance experiments ----
     uint64_t getMessagesSent() const { return messagesSent.load(); }
     uint64_t getBytesSent() const { return bytesSent.load(); }
     uint64_t getBytesReceived() const { return bytesReceived.load(); }
-    // Round trip of the most recent request/reply, in microseconds.
     int64_t getLastRoundTripMicros() const { return lastRoundTripMicros.load(); }
-    // Number of clients the server reported in its last snapshot.
     uint32_t getServerClientCount() const { return serverClientCount.load(); }
 
-    // ---- legacy Milestone 2 view (deprecated) ----
-    // Kept so games that have not moved to GameObjects still compile and play.
-    // sendPlayerState publishes one Player object; getLatestMessages converts the newest snapshot
-    // back into PlayerState / PlatformState messages.
     void sendPlayerState(const NetMessage &message);
     std::vector<NetMessage> getLatestMessages();
 

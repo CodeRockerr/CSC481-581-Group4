@@ -71,7 +71,6 @@ PeerSession::~PeerSession()
 
 void PeerSession::connectTo(const std::string &host, uint16_t port)
 {
-    // Only the lower port dials, so each pair has exactly one connection.
     if (port <= bindPort)
     {
         return;
@@ -337,9 +336,6 @@ void PeerSession::dialPeer(std::string host, uint16_t port)
         }
     }
 }
-
-// ---------------------------------------------------------------------------------------------
-// Legacy NetMessage view (Milestone 2 API). Remove once all games use publish()/sync().
 
 void PeerSession::sendPlayerState(const NetMessage &message)
 {

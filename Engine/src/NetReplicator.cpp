@@ -163,7 +163,7 @@ void NetReplicator::replaceOwner(uint32_t owner, const std::vector<ObjectState> 
     {
         if (state.owner != owner)
         {
-            continue; // a sender may only speak for its own objects
+            continue;
         }
         remote[netKey(state.owner, state.netId)] = state;
     }
@@ -211,7 +211,6 @@ std::size_t NetReplicator::sync(GameObjectManager &objects, const SpawnFn &onSpa
         appliedVersion = remoteVersion;
     }
 
-    // Destroy replicas whose owner stopped sending them (left, crashed or destroyed the object).
     for (auto it = replicaIds.begin(); it != replicaIds.end();)
     {
         if (latest.count(it->first) == 0)
@@ -232,7 +231,6 @@ std::size_t NetReplicator::sync(GameObjectManager &objects, const SpawnFn &onSpa
         }
     }
 
-    // Create new replicas and update existing ones.
     for (const auto &entry : latest)
     {
         const ObjectState &state = entry.second;

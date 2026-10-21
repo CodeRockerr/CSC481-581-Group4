@@ -1,11 +1,3 @@
-// Generic engine server.
-//
-//   engine_server [--port 5555] [--objects N] [--tick 60] [--timeout-ms 3000]
-//
-// Without --objects it runs the legacy Milestone 2 scene (one horizontally moving platform).
-// With --objects N it builds a benchmark scene of N server-owned moving objects split evenly
-// across horizontal, vertical and circular paths, for the Part 1C experiments.
-
 #include "Components.h"
 #include "NetworkIdentity.h"
 #include "Server.h"
@@ -23,7 +15,7 @@ namespace
     struct Mover
     {
         uint32_t id;
-        int pattern; // 0 horizontal, 1 vertical, 2 circular
+        int pattern;
         float centerX;
         float centerY;
         float radius;
