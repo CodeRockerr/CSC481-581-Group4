@@ -1,18 +1,3 @@
-// Headless client for the Part 1C performance experiments.
-//
-//   net_bench_client --format binary|text [--host 127.0.0.1] [--port 5555]
-//                    [--iterations 10000] [--warmup 200] [--owned 1] [--hold-ms 0]
-//
-// One iteration = move owned objects, publish, wait for a fresh server snapshot, sync it into this
-// client's GameObjectManager. That is the full network round trip of one game-loop step, including
-// encode/decode of the chosen format and replica create/update. Requests are sent back to back.
-//
-// Prints one CSV line:
-//   format,iterations,elapsed_ms,mean_us,replicas,bytes_sent,bytes_received,bytes_per_snapshot,mean_rtt_us
-//
-// --hold-ms keeps the client connected (still exchanging at 60 Hz) after the measurement, so a
-// test script can start several clients and have them overlap.
-
 #include "Components.h"
 #include "GameObjectManager.h"
 #include "NetworkClient.h"

@@ -1,12 +1,3 @@
-// Milestone 3 networking integration test (no window needed).
-//
-// 1. Both wire formats round-trip every ObjectState field.
-// 2. A server with two moving platforms and four clients (mixed binary/text) replicates every
-//    player and platform into every client's GameObjectManager.
-// 3. A player's movement reaches another client in well under 100 ms.
-// 4. A client that leaves is removed from the server and from every other client.
-// 5. A client that stops talking without saying goodbye is timed out and removed.
-
 #include "Components.h"
 #include "GameObjectManager.h"
 #include "NetProtocol.h"
@@ -85,7 +76,6 @@ namespace
         }
     };
 
-    // Runs every client's frame loop on this thread at ~60 Hz until `done` or the timeout.
     bool runFrames(std::vector<TestClient *> clients, int timeoutMs, const std::function<bool()> &done)
     {
         const Clock::time_point end = Clock::now() + std::chrono::milliseconds(timeoutMs);
@@ -209,7 +199,6 @@ int main()
     check(converged, "every client sees 3 remote players + 2 platforms");
     check(server.getClientCount() == 4, "server reports 4 clients");
 
-    // Platforms keep moving on every client.
     {
         auto platformX = [](const TestClient &c)
         {
@@ -279,8 +268,6 @@ int main()
 
     std::cout << "Silent drop (crash without Leave)\n";
     {
-        // Simulate a crashed process: a raw socket joins, sends one state, then never speaks
-        // again and never sends Leave.
         void *ctx = zmq_ctx_new();
         void *join = zmq_socket(ctx, ZMQ_REQ);
         const int linger = 0;
@@ -310,7 +297,6 @@ int main()
         zmq_send(game, bytes.data(), bytes.size(), 0);
         char big[65536];
         zmq_recv(game, big, sizeof(big), 0);
-        // ...and now it goes silent forever (as if the process was killed).
 
         const uint32_t ghostId = accept.sender;
         const bool appeared = runFrames(clients, 1000, [&]
@@ -364,7 +350,7 @@ int main()
         }
         check(linked, "two peers (binary + text) replicate each other's player");
 
-        peerB.reset(); // peer B quits
+        peerB.reset();
         bool forgotten = false;
         const Clock::time_point end2 = Clock::now() + std::chrono::seconds(3);
         while (!forgotten && Clock::now() < end2)

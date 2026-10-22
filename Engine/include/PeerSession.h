@@ -1,13 +1,4 @@
 #pragma once
-// Peer-to-peer session (Milestone 2 design by Adit, migrated to the Milestone 3 object model).
-//
-// Every peer binds an accept port and dials every peer with a higher port. Each pair talks over a
-// dedicated REQ/REP socket on its own thread. Every exchange carries the sender's owned objects
-// plus its clock anchor (the earliest start time seen), so shared moving platforms are computed
-// from the same anchor on every peer instead of being sent.
-//
-// A peer's owner id is its bind port. When a peer stops answering, its objects are forgotten and
-// the replicas disappear on the next sync().
 
 #include "NetMessage.h"
 #include "NetProtocol.h"
@@ -33,7 +24,6 @@ public:
 
     void connectTo(const std::string &host, uint16_t port);
 
-    // ---- object model API (Milestone 3) ----
     void publish(const GameObjectManager &objects);
     std::size_t sync(GameObjectManager &objects, const NetReplicator::SpawnFn &onSpawn = nullptr,
                      const NetReplicator::DespawnFn &onDespawn = nullptr);
@@ -45,7 +35,6 @@ public:
     float platformY() const;
     uint16_t getBindPort() const { return bindPort; }
 
-    // ---- legacy Milestone 2 view (deprecated) ----
     void sendPlayerState(const NetMessage &message);
     std::vector<NetMessage> getRemotePlayers() const;
 

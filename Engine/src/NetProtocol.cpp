@@ -53,9 +53,6 @@ namespace
         return true;
     }
 
-    // Text layout:
-    //   T <type> <sender> <tic> <aux> <count>\n
-    //   <netId> <owner> <kind> <flags> <frame> <x> <y> <w> <h> <vx> <vy>\n   (count lines)
     void encodeText(const Packet &packet, std::string &out)
     {
         out.clear();
@@ -75,7 +72,6 @@ namespace
         }
     }
 
-    // Small cursor parser over a non-null-terminated buffer.
     struct Cursor
     {
         const char *p;
