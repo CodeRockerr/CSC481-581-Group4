@@ -6,6 +6,10 @@ out/
 # Visual Studio Code
 .vscode/
 
+# Python cache files
+__pycache__/
+*.py[cod]
+
 # macOS
 .DS_Store
 
