@@ -1,169 +1,194 @@
 #pragma once
-// Lost Under the Sea — Milestone 3 level data (shared by main.cpp and ashah_server later).
-// Required: player, ≥3 static platforms, ≥2 movement patterns, spawns, death zones, side-scroll.
-// Unique: dual suits, pearls to collect, rescue buoy finish, fish hazard + rising current platform.
-
 #include <cstdint>
-
 #include "Component.h"
 #include "MovementPath.h"
 #include "NetProtocol.h"
 
 namespace Sea
 {
-    // ---- network kinds (games use ≥ FirstGameKind) ----
     constexpr uint16_t KindDiver = NetKind::FirstGameKind + 10;
     constexpr uint16_t KindMovingShelf = NetKind::FirstGameKind + 11;
     constexpr uint16_t KindFish = NetKind::FirstGameKind + 12;
+    constexpr uint16_t KindAngler = NetKind::FirstGameKind + 13;
+    constexpr float ViewWidth = 1280, ViewHeight = 720;
+    constexpr float WorldWidth = 1280, WorldHeight = 4200;
+    constexpr float DiverHeight = 80, DiverWidth = 96;
+    constexpr float DiverDrawWidth = 128, DiverDrawHeight = 100;
+    constexpr float DiverBottomPadding = 0;
+    constexpr float PlatformSidePad = 0.04f;
+    constexpr float MoveSpeed = 280, BoostSpeed = 390;
+    constexpr float JumpSpeed = 380, Gravity = 1250;
+    constexpr float BreachSpeed = 520;
+    constexpr float MaxFallSpeed = 180, SwimSpeed = 220;
+    constexpr float PowerDuration = 3;
+    constexpr int MaxHealth = 3;
+    constexpr float SurfaceY = 520;
+    constexpr float GateLeft = 988, GateRight = 1052, GateY = SurfaceY - 40;
+    constexpr float BuoyWidth = 260, BuoyHeight = 78;
+    constexpr float BuoyX = 890, BuoyY = SurfaceY - 70;
+    constexpr float RegionStarts[] = {SurfaceY, 1640, 2760};
+    constexpr float RegionHeights[] = {1120, 1120, 1440};
+    constexpr float RecoveryDepth = 3760;
+    constexpr float LaunchTop = 3840;
 
-    // ---- world / view ----
-    constexpr float ViewWidth = 1280.0f;
-    constexpr float ViewHeight = 720.0f;
-    constexpr float WorldWidth = 3200.0f;
-    constexpr float WorldHeight = 720.0f;
-
-    // Shelf art has empty pixels above the walk surface.
-    constexpr float ShelfTopPadding = 0.20f;
-    constexpr float DiverBottomPadding = 0.10f;
-
-    // ---- static platforms (≥3 unique position / size / tint) ----
+    enum class PlatformArt : uint8_t
+    {
+        CoralPainted,
+        WreckPainted,
+        KelpPainted,
+        SheetCoral,
+        SheetWreck,
+        SheetKelp,
+        SheetCurrent,
+        LegacyShelf
+    };
+    constexpr float topPadding(PlatformArt art)
+    {
+        switch (art)
+        {
+        case PlatformArt::CoralPainted:
+            return 0.13f;
+        case PlatformArt::WreckPainted:
+            return 0.12f;
+        case PlatformArt::KelpPainted:
+            return 0.06f;
+        case PlatformArt::SheetCoral:
+            return 0.30f;
+        case PlatformArt::SheetWreck:
+            return 0.18f;
+        case PlatformArt::SheetKelp:
+            return 0.24f;
+        case PlatformArt::LegacyShelf:
+            return 0.20f;
+        default:
+            return 0.10f;
+        }
+    }
     struct StaticPlatformDef
     {
-        float x, y, width, height;
-        uint8_t r, g, b;
-        const char *label; // for docs / debug
+        float x, width, solidTopY, height;
+        PlatformArt art;
+        const char *label;
+        constexpr float y() const { return solidTopY - height * topPadding(art); }
     };
-
     constexpr StaticPlatformDef StaticPlatforms[] = {
-        {80.0f, 520.0f, 520.0f, 100.0f, 255, 255, 255, "home_shelf"},    // wide start shelf
-        {780.0f, 430.0f, 220.0f, 70.0f, 120, 200, 255, "coral_ledge"},   // small cyan ledge
-        {1280.0f, 480.0f, 360.0f, 90.0f, 255, 170, 90, "wreck_plank"},   // mid wreck, warm tint
-        {2100.0f, 400.0f, 280.0f, 80.0f, 160, 255, 180, "kelp_shelf"},   // late green shelf
-        {2750.0f, 520.0f, 400.0f, 100.0f, 255, 220, 100, "rescue_dock"}, // finish dock
+        {-80, 580, 460, 200, PlatformArt::WreckPainted, "shore-dock"},
+        {100, 340, 920, 120, PlatformArt::SheetCoral, "coral-shelf"},
+        {790, 310, 1240, 115, PlatformArt::CoralPainted, "coral-ridge"},
+        {130, 330, 1570, 100, PlatformArt::WreckPainted, "wreck-checkpoint"},
+        {760, 300, 1870, 105, PlatformArt::SheetWreck, "wreck-overhang"},
+        {160, 280, 2230, 95, PlatformArt::LegacyShelf, "volcanic-ledge"},
+        {810, 290, 2570, 130, PlatformArt::SheetKelp, "deep-kelp"},
+        {100, 340, 2930, 130, PlatformArt::KelpPainted, "abyss-checkpoint"},
+        {730, 300, 3320, 115, PlatformArt::SheetCoral, "abyss-ridge"},
+        {340, 600, LaunchTop, 130, PlatformArt::WreckPainted, "recovery-bed"},
     };
-    constexpr int StaticPlatformCount =
-        sizeof(StaticPlatforms) / sizeof(StaticPlatforms[0]);
-
-    // ---- moving platforms / hazards (≥2 MovementPath patterns) ----
+    constexpr int StaticPlatformCount = sizeof(StaticPlatforms) / sizeof(StaticPlatforms[0]);
     struct MovingDef
     {
         MovementPathType path;
-        float centerX, centerY;
-        float amplitude;
-        float speed; // rad/s
-        float width, height;
-        uint16_t kind; // KindMovingShelf or KindFish
-        uint8_t r, g, b;
+        float centerX, centerY, amplitude, speed, width, height;
+        uint16_t kind;
+        PlatformArt art;
     };
-
-    // Horizontal fish patrol + vertical rising shelf + circular wreck piece.
     constexpr MovingDef Movers[] = {
-        {MovementPathType::Horizontal, 980.0f, 360.0f, 160.0f, 1.1f, 90.0f, 60.0f,
-         KindFish, 255, 255, 255},
-        {MovementPathType::Vertical, 1650.0f, 380.0f, 120.0f, 1.0f, 240.0f, 70.0f,
-         KindMovingShelf, 180, 220, 255},
-        {MovementPathType::Circular, 2400.0f, 320.0f, 90.0f, 0.85f, 200.0f, 60.0f,
-         KindMovingShelf, 255, 190, 140},
+        {MovementPathType::Horizontal, 460, 760, 250, 1.0f, 105, 65, KindFish, PlatformArt::LegacyShelf},
+        {MovementPathType::Horizontal, 580, 1400, 290, 1.0f, 130, 80, KindAngler, PlatformArt::LegacyShelf},
+        {MovementPathType::Vertical, 560, 1630, 90, 0.9f, 220, 95, KindMovingShelf, PlatformArt::SheetCurrent},
+        {MovementPathType::Horizontal, 470, 2030, 300, 1.2f, 110, 70, KindFish, PlatformArt::LegacyShelf},
+        {MovementPathType::Circular, 590, 2390, 170, 0.95f, 135, 80, KindAngler, PlatformArt::LegacyShelf},
+        {MovementPathType::Circular, 590, 2770, 95, 0.6f, 210, 100, KindMovingShelf, PlatformArt::SheetKelp},
+        {MovementPathType::Horizontal, 490, 3100, 305, 1.35f, 112, 70, KindFish, PlatformArt::LegacyShelf},
+        {MovementPathType::Horizontal, 530, 3540, 255, 1.2f, 140, 85, KindAngler, PlatformArt::LegacyShelf},
+        {MovementPathType::Vertical, 700, 2160, 120, 1.15f, 110, 70, KindFish, PlatformArt::LegacyShelf},
+        {MovementPathType::Horizontal, 580, 3650, 270, 1.4f, 120, 75, KindFish, PlatformArt::LegacyShelf},
     };
     constexpr int MoverCount = sizeof(Movers) / sizeof(Movers[0]);
-
-    // MovementPath circular centers one radius left of the start position.
     inline void moverStart(int index, float &x, float &y)
     {
-        const MovingDef &m = Movers[index];
-        x = m.path == MovementPathType::Circular ? m.centerX + m.amplitude : m.centerX;
+        const auto &m = Movers[index];
+        x = m.centerX + (m.path == MovementPathType::Circular ? m.amplitude : 0);
         y = m.centerY;
     }
-
-    // ---- hidden spawn points (multiple) ----
     struct SpawnDef
     {
         const char *name;
         float x, y;
     };
-
     constexpr SpawnDef Spawns[] = {
-        {"start", 160.0f, 420.0f},
-        {"mid", 1320.0f, 380.0f},
-        {"late", 2150.0f, 300.0f},
+        {"departure", 80, 460 - DiverHeight},
+        {"wreck", 270, 1570 - DiverHeight},
+        {"abyss", 230, 2930 - DiverHeight},
     };
     constexpr int SpawnCount = sizeof(Spawns) / sizeof(Spawns[0]);
-
-    // ---- hidden death zones (pit) ----
-    struct DeathZoneDef
-    {
-        float x, y, width, height;
-        const char *spawnName; // default respawn; game can override to last checkpoint
-    };
-
-    constexpr DeathZoneDef DeathZones[] = {
-        {0.0f, 680.0f, 1600.0f, 100000.0f, "start"},
-        {1600.0f, 680.0f, 1600.0f, 100000.0f, "mid"},
-    };
-    constexpr int DeathZoneCount = sizeof(DeathZones) / sizeof(DeathZones[0]);
-
-    // ---- side-scroll camera edges (smooth, Cave Ninja style) ----
-    constexpr float ScrollLeftEdge = ViewWidth * 0.30f;
-    constexpr float ScrollRightEdge = ViewWidth * 0.60f;
-
-    // ---- unique: pearls to collect ----
     struct PearlDef
     {
         float x, y, size;
+        int movingIndex = -1;
     };
-
     constexpr PearlDef Pearls[] = {
-        {900.0f, 360.0f, 28.0f},
-        {1400.0f, 300.0f, 28.0f},
-        {1900.0f, 250.0f, 28.0f},
-        {2500.0f, 280.0f, 28.0f},
+        {260, 860, 34},
+        {940, 1180, 34},
+        {310, 1510, 34},
+        {910, 1810, 34},
+        {290, 2170, 34},
+        {950, 2510, 34},
+        {773, 2754, 34, 5},
+        {270, 2870, 34},
+        {650, 3780, 34},
     };
     constexpr int PearlCount = sizeof(Pearls) / sizeof(Pearls[0]);
-    constexpr int PearlsNeededToWin = 3; // need at least this many before buoy counts
-
-    // ---- unique: rescue buoy (finish) ----
-    constexpr float BuoyX = 2920.0f;
-    constexpr float BuoyY = 400.0f;
-    constexpr float BuoyW = 70.0f;
-    constexpr float BuoyH = 90.0f;
-
-    // ---- player ----
-    constexpr float MoveSpeed = 320.0f;
-    constexpr float JumpSpeed = 620.0f;
-    constexpr float Gravity = 1600.0f;
-    constexpr int MaxHealth = 3;
-
-    // ---- game-only components ----
+    constexpr int PearlsNeededToWin = PearlCount;
+    constexpr float UrchinHeight = 36;
+    struct UrchinDef
+    {
+        int platform;
+        float offset, width;
+        constexpr float x() const { return StaticPlatforms[platform].x + offset; }
+        constexpr float y() const { return StaticPlatforms[platform].solidTopY - UrchinHeight + 4; }
+    };
+    constexpr UrchinDef Urchins[] = {
+        {1, 18, 75},
+        {2, 210, 80},
+        {4, 18, 85},
+        {5, 18, 75},
+        {6, 190, 95},
+        {7, 18, 80},
+        {8, 195, 80},
+        {9, 18, 85},
+    };
+    inline int urchinCount(float width) { return static_cast<int>(width / 30) + 1; }
+    inline float urchinRadius(float width) { return width / urchinCount(width) * .5f; }
+    struct PowerDef
+    {
+        float x, y;
+    };
+    constexpr PowerDef Powers[] = {{540, 1060}, {620, 2140}, {600, 3130}};
+    constexpr int PowerCount = sizeof(Powers) / sizeof(Powers[0]);
 
     struct Ground : Component
     {
         explicit Ground(int movingIndex = -1) : movingIndex(movingIndex) {}
-        int movingIndex = -1; // ≥0 if this is Movers[index]
+        int movingIndex;
     };
-
-    struct ScrollBoundary : Component
+    struct RecoveryBed : Component
     {
-        explicit ScrollBoundary(int direction = 1) : direction(direction) {}
-        int direction = 1; // -1 left, +1 right
     };
-
-    // Touching the fish costs a heart (then respawn), like M2.
+    struct Shore : Component
+    {
+    };
     struct Hazard : Component
     {
     };
-
+    struct Urchin : Component
+    {
+    };
     struct Pearl : Component
     {
         bool collected = false;
     };
-
-    struct RescueBuoy : Component
+    struct PowerUp : Component
     {
-    };
-
-    // Local HUD hearts are not networked.
-    struct HudHeart : Component
-    {
-        int index = 0;
+        bool collected = false;
     };
 }
