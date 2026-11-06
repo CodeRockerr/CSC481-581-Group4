@@ -133,6 +133,8 @@ target_link_libraries(gameplay_systems_test PRIVATE
     engine
 )
 
+
+
 if(BUILD_TESTING)
     add_executable(event_manager_test Tests/EventManagerTest.cpp)
     target_link_libraries(event_manager_test PRIVATE engine)
@@ -143,6 +145,9 @@ if(BUILD_TESTING)
     add_executable(engine_events_test Tests/EngineEventsTest.cpp)
     target_link_libraries(engine_events_test PRIVATE engine)
     add_test(NAME engine_events_test COMMAND engine_events_test)
+    add_executable(EventChainTest Tests/EventChainTest.cpp)
+    target_link_libraries(EventChainTest PRIVATE engine)
+    add_test(NAME EventChainTest COMMAND EventChainTest)
     set_tests_properties(engine_events_test PROPERTIES
         ENVIRONMENT "SDL_VIDEODRIVER=dummy;SDL_RENDER_DRIVER=software"
         TIMEOUT 15

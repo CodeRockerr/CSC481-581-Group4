@@ -1,0 +1,100 @@
+# Gameplay Events: Usage Guide
+
+This covers the input, collision, death and spawn producers and their common handlers.
+It builds on Adit's `EventManager` and `ReplayController`.
+
+## 1. The event chain
+
+| Producer (only calls `raise()`) | Event | Handler (runs inside `dispatch()`) | Result |
+|---|---|---|---|
+| `InputSystem::poll` | Input (`move_x`, `jump_held`, `jump_pressed`, `down_held`) | `GameplayEvents::onInput` | writes `PlayerIntent` |
+| `GameplayEvents::produceCollisions` | Collision (enter only) | `onCollision` | death zones raise Death, scroll triggers move the camera, then `Rules::onCollision` |
+| `onCollision` (death zone), `produceOutOfBounds`, game hazard code | Death | `onDeath` | `Rules::onDeath` decides lives/game over and returns a spawn point name |
+| `onDeath` | Spawn | `onSpawn` | position set to spawn point, velocity zeroed, then `Rules::onSpawned` |
+
+Producers never call handlers. Handlers may raise child events. Those run in the same drain when they are already due, bounded by Adit's budget.
+
+### Event field conventions
+- **Collision:** `source` = player, `target` = touched object, `normal` points from the other object toward the player, `trigger` = `Collider::isTrigger`.
+- **Death:** `source` = cause (death zone, hazard, or none), `target` = victim, `reason` = text.
+- **Spawn:** `source` = spawn point object (if found), `target` = subject, `spawnPoint` = name.
+- **Input:** `target` = player, `action` and `value` as in `InputActions`.
+- Objects are identified by `EventObjects::of(obj)`: `{ownerId, netId}` when networked, otherwise `{0, localId}`. `EventObjects::resolve` is the reverse lookup and returns `nullptr` if the object is gone. Handlers ignore events whose target no longer exists.
+
+## 2. Setup in a game
+
+```cpp
+GameplayEvents gameplay(engine.getEvents(), engine.getObjects(), engine.getCamera());
+player.add<PlayerIntent>();            // once, next to PlayerInput
+
+GameplayEvents::Rules rules;
+rules.onDeath = [&](GameObject& victim, const Event& death) -> std::optional<std::string> {
+    // game-specific: lives, cooldown, game over...
+    return gameplay.defaultSpawnFor(death);   // or "start" after game over, or nullopt for no respawn
+};
+rules.onSpawned = [&](GameObject&, const Event&) { /* camera snap, hearts, grounded = false */ };
+gameplay.setRules(rules);
+
+// in gameUpdate, every frame (also during playback):
+gameplay.produceCollisions(playerId);
+gameplay.produceOutOfBounds(playerId, WorldHeight + 200.0f, "fell out of the sky");
+```
+
+Game-specific hazards (for example Kuromi in Hello Kitty) use `Rules::onCollision`. Check for the hazard component on `other`, then call `gameplay.raiseDeath(player, &other, "reason")`.
+
+## 3. Three small edits to existing engine files
+
+**a) `Engine.cpp`: poll input inside the replay frame.** Add this immediately before `replay->dispatch(ReplayPhase::Input);`:
+```cpp
+InputSystem::poll(*events, objects);   // + #include "InputSystem.h"
+```
+This must come after `replay->beginFrame()` so the recorder files the events under the Input phase. This is Adit's file, so he should apply or approve it.
+
+**b) `Components.h`: `PlayerInput` reads intent when present.** Add `#include "GameObject.h"` and `#include "PlayerIntent.h"`, then replace the four helpers:
+```cpp
+float horizontalAxis() const
+{
+    if (!enabled) return 0.0f;
+    if (const PlayerIntent* i = intent()) return i->moveX;
+    float axis = 0.0f;
+    if (anyPressed(left))  axis -= 1.0f;
+    if (anyPressed(right)) axis += 1.0f;
+    return axis;
+}
+bool jumpPressed() const     { if (!enabled) return false; if (auto* i = intent()) return i->jumpHeld;    return anyPressed(jump); }
+bool jumpJustPressed() const { if (!enabled) return false; if (auto* i = intent()) return i->jumpPressed; return anyJustPressed(jump); }
+bool downPressed() const     { if (!enabled) return false; if (auto* i = intent()) return i->downHeld;    return anyPressed(down); }
+// in the private section:
+const PlayerIntent* intent() const { return owner ? owner->get<PlayerIntent>() : nullptr; }
+```
+A player without `PlayerIntent` still polls keys directly, so existing games keep working.
+
+**c) CMake.** Add these to the `engine` library:
+```
+    src/InputSystem.cpp
+    src/GameplayEvents.cpp
+```
+Add this to the Tests CMake:
+```
+add_executable(EventChainTest Tests/EventChainTest.cpp)
+target_link_libraries(EventChainTest PRIVATE engine)
+add_test(NAME EventChainTest COMMAND EventChainTest)
+```
+Copy the headers to `include/`, the sources to `src/`, and the test to `Tests/`.
+
+`GameplaySystems::updateDeathZones` and `updateSideScrollTriggers` are left unchanged, so `GamePlaySystemsTest` keeps passing. New games should use `GameplayEvents` instead and not call both.
+
+## 4. Replay checklist (state each game's capture/restore hook must handle)
+The replay records Input events and the pending events at record start. Collision, Death and Spawn events are regenerated by re-running the same simulation. To make that reproducible, the restore hook must reset every piece of state that decides whether a producer fires:
+- player transform and velocity, and `PlayerIntent::reset()`
+- `gameplay.resetTransientState()`, which clears touching pairs and the out-of-bounds latch and re-arms every `DeathZone`
+- `SideScrollTrigger::activated`, camera position, and `MovementPath::elapsedTime` and `initialized`
+- the game's own state (lives, deaths, cooldowns, grounded/riding flags)
+
+Producers run every frame during playback. While playing, `raise()` drops live Input and tags local events as Replay origin, so the producers need no special replay code.
+
+## 5. Known limits
+- Collision events fire on enter only (no "stay" or "exit"). The producer tests the player against all other colliders, which is O(n) per frame.
+- Solid-contact resolution (landing on ground) still lives in each game. Physics does not resolve collisions.
+- If `Rules::onDeath` suppresses a death (for example a cooldown) and returns nullopt, the player is not teleported and the zone stays disarmed until the player leaves it.
+- Death and Spawn are local by default. `setShareLifecycleEvents(true)` marks them shareable for Sai's transport, and spawn-vs-snapshot ownership of remote objects is Sai's contract.

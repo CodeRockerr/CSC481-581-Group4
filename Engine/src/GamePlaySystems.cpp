@@ -92,7 +92,7 @@ void GameplaySystems::updateMovementPaths(
                 // angle 0 keeps the object at its authored start position.
                 if (path.type == MovementPathType::Circular)
                 {
-                    path.centerX = transform.x - path.distance;
+                    path.centerX = transform.x;
                     path.centerY = transform.y;
                 }
                 else
@@ -119,8 +119,8 @@ void GameplaySystems::updateMovementPaths(
                 break;
 
             case MovementPathType::Circular:
-                transform.x = path.centerX + std::cos(angle) * path.distance;
-                transform.y = path.centerY + std::sin(angle) * path.distance;
+                transform.x = path.startX;
+                transform.y = path.startY + std::sin(angle) * path.distance;
                 break;
             }
         });
