@@ -26,16 +26,12 @@ set(CMAKE_LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/$<CONFIGURATION>")
 
 add_subdirectory(vendored/SDL EXCLUDE_FROM_ALL)
 
-# Keep the original connectivity smoke-test around; harmless to leave in.
 add_executable(hello hello.cpp)
 target_link_libraries(hello PRIVATE SDL3::SDL3)
 
-# --- Milestone 1 additions ---
 add_subdirectory(Engine)
 
-# Each teammate gets their own subfolder under Games/ with its own
-# CMakeLists.txt, so everyone's individual game builds as a separate
-# executable against the shared Engine library.
+
 add_subdirectory(Games/skaveti)
 add_subdirectory(Games/ymherya)
 add_subdirectory(Games/ashah)
@@ -138,6 +134,19 @@ target_link_libraries(gameplay_systems_test PRIVATE
 )
 
 if(BUILD_TESTING)
+    add_executable(event_manager_test Tests/EventManagerTest.cpp)
+    target_link_libraries(event_manager_test PRIVATE engine)
+    add_test(NAME event_manager_test COMMAND event_manager_test)
+    add_executable(replay_test Tests/ReplayTest.cpp)
+    target_link_libraries(replay_test PRIVATE engine)
+    add_test(NAME replay_test COMMAND replay_test)
+    add_executable(engine_events_test Tests/EngineEventsTest.cpp)
+    target_link_libraries(engine_events_test PRIVATE engine)
+    add_test(NAME engine_events_test COMMAND engine_events_test)
+    set_tests_properties(engine_events_test PROPERTIES
+        ENVIRONMENT "SDL_VIDEODRIVER=dummy;SDL_RENDER_DRIVER=software"
+        TIMEOUT 15
+    )
     add_test(NAME object_model_test COMMAND object_model_test)
     add_test(NAME object_systems_test COMMAND object_systems_test)
     add_test(NAME camera_test COMMAND camera_test)

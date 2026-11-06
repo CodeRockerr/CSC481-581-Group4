@@ -14,6 +14,8 @@
 #include "FrameWorker.h"
 #include "RenderItem.h"
 #include "Camera.h"
+#include "EventManager.h"
+#include "ReplayController.h"
 
 class Engine
 {
@@ -30,6 +32,10 @@ public:
     Renderer &getRenderer() { return renderer; }
     Window &getWindow() { return window; }
     Camera &getCamera() { return camera; }
+    EventManager &getEvents() { return *events; }
+    ReplayController &getReplay() { return *replay; }
+    float getFrameDelta(int timelineId) const;
+    float getFrameRealDelta() const { return frameTiming.realDelta; }
 
     Timeline &getGlobalTimeline() { return globalTimeline; }
     Timeline &getTimeline(int id) { return *timelines[id]; }
@@ -51,6 +57,9 @@ private:
     Camera camera;
     Timeline globalTimeline;
     std::vector<std::unique_ptr<Timeline>> timelines;
+    std::unique_ptr<EventManager> events;
+    std::unique_ptr<ReplayController> replay;
+    FrameTiming frameTiming;
     bool running = true;
 
     std::function<void(float)> worldCallback;
@@ -60,7 +69,7 @@ private:
     std::unique_ptr<FrameWorker> worldWorker;
 
     void handleTimeKeys();
-    std::vector<float> stepTimelines();
+    FrameTiming stepTimelines();
     void buildPlayerFrame();
     void buildWorldFrame();
     void paceFrame(Uint64 frameStartNS);
