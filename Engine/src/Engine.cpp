@@ -22,6 +22,8 @@ Engine::Engine(const std::string &title, int width, int height)
     camera.setViewport(static_cast<float>(window.getWidth()), static_cast<float>(window.getHeight()));
     createTimeline(DefaultTicSize, 1.0);
     createTimeline(DefaultTicSize, 1.0);
+    events = std::make_unique<EventManager>(getTimeline(WorldTime));
+    replay = std::make_unique<ReplayController>(*events);
 }
 
 int Engine::createTimeline(int64_t ticSize, double scale, int anchorId)
@@ -63,21 +65,30 @@ void Engine::handleTimeKeys()
     }
 }
 
-std::vector<float> Engine::stepTimelines()
+float Engine::getFrameDelta(int timelineId) const
+{
+    if (timelineId < 0 || timelineId >= static_cast<int>(frameTiming.timelines.size()))
+        return 0;
+    return frameTiming.timelines[timelineId].delta;
+}
+
+FrameTiming Engine::stepTimelines()
 {
     globalTimeline.step();
-    std::vector<float> deltas;
-    deltas.reserve(timelines.size());
+    FrameTiming timing;
+    timing.realDelta = static_cast<float>(globalTimeline.getLastDelta());
     for (auto &t : timelines)
     {
-        deltas.push_back(static_cast<float>(t->step()));
+        const auto delta = static_cast<float>(t->step());
+        const bool paused = t->isPaused();
+        timing.timelines.push_back({paused ? 0.f : delta, t->getScale(), paused});
     }
-    return deltas;
+    return timing;
 }
 
 void Engine::buildPlayerFrame()
 {
-    float deltaTime = static_cast<float>(timelines[PlayerTime]->step());
+    float deltaTime = getFrameDelta(PlayerTime);
     physics.updateTimeline(entities, PlayerTime, deltaTime);
     entities.updateTimeline(PlayerTime, deltaTime);
     physics.updateTimeline(objects, PlayerTime, deltaTime);
@@ -92,7 +103,7 @@ void Engine::buildWorldFrame()
         {
             continue;
         }
-        float deltaTime = static_cast<float>(timelines[id]->step());
+        float deltaTime = getFrameDelta(id);
         physics.updateTimeline(entities, id, deltaTime);
         entities.updateTimeline(id, deltaTime);
         physics.updateTimeline(objects, id, deltaTime);
@@ -101,7 +112,7 @@ void Engine::buildWorldFrame()
 
     if (worldCallback)
     {
-        worldCallback(static_cast<float>(timelines[WorldTime]->getLastDelta()));
+        worldCallback(getFrameDelta(WorldTime));
     }
 }
 
@@ -126,7 +137,7 @@ void Engine::run(const std::function<void(float)> &gameUpdate,
                  const std::function<void(float)> &worldUpdate)
 {
     worldCallback = worldUpdate;
-    stepTimelines();
+    frameTiming = stepTimelines();
     entities.copySnapshot(finishedFrame);
     objects.copySnapshot(finishedObjectFrame);
 
@@ -154,13 +165,26 @@ void Engine::run(const std::function<void(float)> &gameUpdate,
         }
 
         Input::update();
-        handleTimeKeys();
-        globalTimeline.step();
+        if (!replay->isPlaying())
+            handleTimeKeys();
+        replay->beginFrame(stepTimelines());
+        frameTiming = replay->getFrameTiming();
+        if (replay->isPlaying())
+            for (std::size_t i = 0; i < timelines.size(); ++i)
+            {
+                timelines[i]->setScale(frameTiming.timelines[i].scale);
+                if (frameTiming.timelines[i].paused)
+                    timelines[i]->pause();
+                else
+                    timelines[i]->unpause();
+            }
+        replay->dispatch(ReplayPhase::Input);
 
         if (gameUpdate)
         {
-            gameUpdate(static_cast<float>(timelines[WorldTime]->getLastDelta()));
+            gameUpdate(getFrameDelta(WorldTime));
         }
+        replay->dispatch(ReplayPhase::Update);
 
         playerWorker->start();
         worldWorker->start();
@@ -173,6 +197,8 @@ void Engine::run(const std::function<void(float)> &gameUpdate,
         playerWorker->wait();
         worldWorker->wait();
 
+        replay->dispatch(ReplayPhase::Workers);
+        replay->endFrame();
         objects.flushDestroyed();
 
         renderer.present();
