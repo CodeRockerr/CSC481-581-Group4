@@ -545,9 +545,10 @@ int main(int argc, char *argv[])
             const float playerDelta = static_cast<float>(playerTime.getLastDelta());
             camera.setViewport(Cave::ViewWidth, Cave::ViewHeight);
 
-            if (net)
+            // During local replay the recorded run owns the world, so live snapshots are not applied.
+            if (net && !events.isPlaybackMode())
                 net->sync(objects, onSpawn);
-            if (peers)
+            if (peers && !events.isPlaybackMode())
                 peers->sync(objects, onSpawn);
             if (bridge)
                 bridge->pump(); // network -> EventManager (handled in this frame's dispatch)
@@ -774,9 +775,10 @@ int main(int argc, char *argv[])
                 pinBoundaries();
             }
 
-            if (net)
+            // ...and the replayed state is never published to other players.
+            if (net && !events.isPlaybackMode())
                 net->publish(objects);
-            if (peers)
+            if (peers && !events.isPlaybackMode())
                 peers->publish(objects);
 
             ++framesSinceTitle;
