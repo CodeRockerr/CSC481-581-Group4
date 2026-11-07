@@ -52,9 +52,12 @@ This is Adit's engine foundation, not a claim that all Milestone 4 submissions a
 - `EventId` is `(ownerId, sequence)`. A zero sequence requests a new local ID.
   `setOwnerId` selects the producer's owner before network integration. Incoming
   nonzero IDs are preserved. The manager itself does not deduplicate deliveries.
-- `EventObject` is `(ownerId, netId)`. For offline use, owner zero with a local object
-  ID is sufficient. Network receivers must resolve identities through replication,
-  not assume that remote netIds equal local GameObject IDs.
+- `EventObject` is `(ownerId, netId)`. Use `EventObjects::of(object)` to create
+  references. Offline references use `EventObjects::OfflineOwner` (`0xFFFFFFFFu`)
+  with a local object ID; owner zero is reserved for server-owned network objects.
+  `EventObjects::resolve` distinguishes offline references from network references
+  and matches both owner and network ID for the latter. Remote netIds need not
+  equal local GameObject IDs.
 - Origins are Local, Network, and Replay. A transport must mark incoming events
   Network and only publish appropriate Local, shareable events.
 - Replay controls are never shareable. Type zero is reserved and rejected.
@@ -148,6 +151,11 @@ timers, checkpoint/mission state, and camera state where applicable. The game mu
 restore relevant object identities and listener bindings. Do not capture references
 to mutable live state as the snapshot.
 
+When using GameplayEvents, include `captureTransientState()` in the game snapshot
+and restore it with `restoreTransientState(saved.transient)`. This preserves contact
+history, the out-of-bounds latch, and death-zone armed flags. `resetTransientState()`
+is for fresh games or levels; using it for replay restore can introduce extra deaths.
+
 Replay-aware code must use the frame timing getters and `getEvents().now()` for game
 time. Reading raw wall time or Timeline elapsed time during playback bypasses the
 recorded simulation. Live snapshot application and publication must be disabled
@@ -170,10 +178,12 @@ verify repeated playback of the same simulation using the same build.
 A minimal offline input integration is:
 
 ```cpp
+#include "EventObjects.h"
+
 auto &events = engine.getEvents();
 auto subscription = events.subscribe(EventTypes::Input, [&](const Event &event)
 {
-    if (event.target.netId != player.getId())
+    if (!(event.target == EventObjects::of(player)))
         return;
     const auto &input = std::get<InputEvent>(event.payload);
     if (input.action == "horizontal")
@@ -182,7 +192,7 @@ auto subscription = events.subscribe(EventTypes::Input, [&](const Event &event)
 
 Event move;
 move.type = EventTypes::Input;
-move.target = {0, player.getId()};
+move.target = EventObjects::of(player);
 move.payload = InputEvent{"horizontal", 1};
 events.raise(move);
 ```

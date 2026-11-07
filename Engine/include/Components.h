@@ -1,8 +1,9 @@
 #pragma once
-#include <cstddef>
 #include <SDL3/SDL.h>
 #include "Component.h"
+#include "GameObject.h"
 #include "Input.h"
+#include "PlayerIntent.h"
 
 struct Transform : Component
 {
@@ -74,10 +75,14 @@ struct PlayerInput : Component
     float jumpSpeed = 500.0f;
     bool enabled = true;
 
+    // If the owner has a PlayerIntent component, these read what the Input event handler wrote
+    // (event-driven, replayable). Otherwise they poll the keyboard directly, as before.
     float horizontalAxis() const
     {
         if (!enabled)
             return 0.0f;
+        if (const PlayerIntent *i = intent())
+            return i->moveX;
         float axis = 0.0f;
         if (anyPressed(left))
             axis -= 1.0f;
@@ -86,11 +91,36 @@ struct PlayerInput : Component
         return axis;
     }
 
-    bool jumpPressed() const { return enabled && anyPressed(jump); }
-    bool jumpJustPressed() const { return enabled && anyJustPressed(jump); }
-    bool downPressed() const { return enabled && anyPressed(down); }
+    bool jumpPressed() const
+    {
+        if (!enabled)
+            return false;
+        if (const PlayerIntent *i = intent())
+            return i->jumpHeld;
+        return anyPressed(jump);
+    }
+
+    bool jumpJustPressed() const
+    {
+        if (!enabled)
+            return false;
+        if (const PlayerIntent *i = intent())
+            return i->jumpPressed;
+        return anyJustPressed(jump);
+    }
+
+    bool downPressed() const
+    {
+        if (!enabled)
+            return false;
+        if (const PlayerIntent *i = intent())
+            return i->downHeld;
+        return anyPressed(down);
+    }
 
 private:
+    const PlayerIntent *intent() const { return owner ? owner->get<PlayerIntent>() : nullptr; }
+
     template <std::size_t N>
     static bool anyPressed(const SDL_Scancode (&keys)[N])
     {

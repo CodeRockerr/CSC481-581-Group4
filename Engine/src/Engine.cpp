@@ -1,4 +1,5 @@
 #include "Engine.h"
+#include "InputSystem.h"
 #include <stdexcept>
 
 namespace
@@ -178,6 +179,7 @@ void Engine::run(const std::function<void(float)> &gameUpdate,
                 else
                     timelines[i]->unpause();
             }
+        InputSystem::poll(*events, objects);
         replay->dispatch(ReplayPhase::Input);
 
         if (gameUpdate)

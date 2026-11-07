@@ -19,6 +19,8 @@ add_library(engine STATIC
     src/GamePlaySystems.cpp
     src/EventManager.cpp
     src/ReplayController.cpp
+    src/InputSystem.cpp
+    src/GamePlayEvents.cpp
 )
 
 target_include_directories(engine PUBLIC include PRIVATE ../vendored/SDL/src/video)
