@@ -205,6 +205,7 @@ void Server::clientLoop(uint32_t clientId, void *socket, std::shared_ptr<std::at
     zmq_setsockopt(socket, ZMQ_LINGER, &linger, sizeof(linger));
     zmq_setsockopt(socket, ZMQ_RCVTIMEO, &receiveTimeout, sizeof(receiveTimeout));
 
+    registerEventLink(clientId);
     clientCount.fetch_add(1);
     std::cout << "Client " << clientId << " connected (" << clientCount.load() << " connected)\n";
 
@@ -257,9 +258,11 @@ void Server::clientLoop(uint32_t clientId, void *socket, std::shared_ptr<std::at
                 state.owner = clientId;
             }
             replicator.replaceOwner(clientId, incoming.objects);
+            acceptEvents(clientId, incoming);
         }
 
         buildSnapshot(snapshot);
+        attachEvents(clientId, snapshot);
         if (!sendPacket(socket, format, snapshot, buffer, &bytesSent))
         {
             reason = "send failed";
@@ -268,10 +271,126 @@ void Server::clientLoop(uint32_t clientId, void *socket, std::shared_ptr<std::at
     }
 
     replicator.forgetOwner(clientId);
+    forgetEventLink(clientId);
     zmq_close(socket);
     clientCount.fetch_sub(1);
     std::cout << "Client " << clientId << " " << reason << " (" << clientCount.load() << " connected)\n";
     finished->store(true);
+}
+
+void Server::setEventFilter(EventFilter filter)
+{
+    std::lock_guard<std::mutex> lock(eventMutex);
+    eventFilter = std::move(filter);
+}
+
+void Server::registerEventLink(uint32_t clientId)
+{
+    std::lock_guard<std::mutex> lock(eventMutex);
+    eventLinks[clientId] = EventLink{};
+}
+
+void Server::forgetEventLink(uint32_t clientId)
+{
+    std::lock_guard<std::mutex> lock(eventMutex);
+    eventLinks.erase(clientId);
+}
+
+void Server::queueForClient(EventLink &link, const Event &event)
+{
+    link.pending.push_back({link.nextOutgoing++, event});
+}
+
+void Server::broadcastEvent(Event event)
+{
+    if (event.type == 0 || isReplayControl(event.type))
+    {
+        return;
+    }
+    event.id.ownerId = 0;
+    event.origin = EventOrigin::Network;
+    event.shareable = false;
+    std::lock_guard<std::mutex> lock(eventMutex);
+    for (auto &entry : eventLinks)
+    {
+        queueForClient(entry.second, event);
+    }
+}
+
+// Authoritative ordering: all fan-out happens under eventMutex, so the order in which events
+// are appended is the same in every recipient's queue.
+void Server::acceptEvents(uint32_t clientId, Packet &incoming)
+{
+    std::lock_guard<std::mutex> lock(eventMutex);
+    auto found = eventLinks.find(clientId);
+    if (found == eventLinks.end())
+    {
+        return;
+    }
+    EventLink &link = found->second;
+
+    // The client's ack lets us release events it has confirmed.
+    while (!link.pending.empty() && link.pending.front().seq <= incoming.eventAck)
+    {
+        link.pending.pop_front();
+    }
+
+    for (NetEvent &entry : incoming.events)
+    {
+        if (entry.seq < link.nextExpected)
+        {
+            duplicateEvents.fetch_add(1);
+            continue;
+        }
+        if (entry.seq > link.nextExpected)
+        {
+            break; // gap: the client retransmits from its first unacknowledged event
+        }
+        ++link.nextExpected;
+
+        Event &event = entry.event;
+        // Never trust the sender's identity claims or replay/control flags.
+        event.id.ownerId = clientId;
+        event.origin = EventOrigin::Network;
+        event.shareable = false;
+        if (event.type == 0 || isReplayControl(event.type) ||
+            (eventFilter && !eventFilter(event, clientId)))
+        {
+            rejectedEvents.fetch_add(1);
+            continue;
+        }
+
+        for (auto &other : eventLinks)
+        {
+            if (other.first != clientId)
+            {
+                queueForClient(other.second, event);
+            }
+        }
+        eventsRouted.fetch_add(1);
+    }
+}
+
+void Server::attachEvents(uint32_t clientId, Packet &reply)
+{
+    reply.events.clear();
+    reply.eventAck = 0;
+    std::lock_guard<std::mutex> lock(eventMutex);
+    auto found = eventLinks.find(clientId);
+    if (found == eventLinks.end())
+    {
+        return;
+    }
+    const EventLink &link = found->second;
+    reply.eventAck = link.nextExpected - 1;
+    for (const NetEvent &pending : link.pending)
+    {
+        if (reply.events.size() >= kMaxEventsPerPacket)
+        {
+            break;
+        }
+        reply.events.push_back(pending);
+    }
 }
 
 void Server::reapFinishedClients()

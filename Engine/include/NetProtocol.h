@@ -5,6 +5,8 @@
 #include <string>
 #include <vector>
 
+#include "Event.h"
+
 enum class WireFormat : uint8_t
 {
     Binary = 'B',
@@ -72,6 +74,14 @@ inline uint64_t netKey(uint32_t owner, uint32_t netId)
     return (static_cast<uint64_t>(owner) << 32) | netId;
 }
 
+// One reliable event in flight on a single client<->server link. `seq` is contiguous per
+// direction per link (1, 2, 3, ...) so a cumulative acknowledgment is enough.
+struct NetEvent
+{
+    uint64_t seq = 0;
+    Event event;
+};
+
 struct Packet
 {
     PacketType type = PacketType::State;
@@ -79,7 +89,15 @@ struct Packet
     int64_t tic = 0;
     uint32_t aux = 0;
     std::vector<ObjectState> objects;
+
+    // Milestone 4 event trailer. Written only when `events` is non-empty or `eventAck` is
+    // non-zero, so packets without events stay byte-identical to the Milestone 3 format.
+    // `eventAck` is the highest contiguous seq the sender has received from the peer.
+    std::vector<NetEvent> events;
+    uint64_t eventAck = 0;
 };
+
+constexpr std::size_t kMaxEventsPerPacket = 64;
 
 namespace NetProtocol
 {

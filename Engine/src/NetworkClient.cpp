@@ -109,6 +109,15 @@ bool NetworkClient::connect()
         return false;
     }
 
+    {
+        // A fresh join is a fresh server-side link: sequence numbers restart at 1.
+        std::lock_guard<std::mutex> lock(eventMutex);
+        outgoingEvents.clear();
+        inboundEvents.clear();
+        nextOutgoingSeq = 1;
+        nextInboundSeq = 1;
+    }
+
     leaveRequested = false;
     running = true;
     networkThread = std::thread(&NetworkClient::networkLoop, this);
@@ -224,6 +233,21 @@ void NetworkClient::networkLoop()
 
         request.sender = clientId.load();
         request.objects = replicator.takeOutgoing();
+        {
+            // Resend every unacknowledged event (up to the packet cap) on each exchange;
+            // the server accepts each seq once, so retransmission is harmless.
+            std::lock_guard<std::mutex> lock(eventMutex);
+            request.events.clear();
+            for (const NetEvent &pending : outgoingEvents)
+            {
+                if (request.events.size() >= kMaxEventsPerPacket)
+                {
+                    break;
+                }
+                request.events.push_back(pending);
+            }
+            request.eventAck = nextInboundSeq - 1;
+        }
 
         if (!exchange(request, reply))
         {
@@ -238,6 +262,29 @@ void NetworkClient::networkLoop()
         if (reply.type != PacketType::Snapshot)
         {
             continue;
+        }
+
+        {
+            std::lock_guard<std::mutex> lock(eventMutex);
+            while (!outgoingEvents.empty() && outgoingEvents.front().seq <= reply.eventAck)
+            {
+                outgoingEvents.pop_front();
+            }
+            for (NetEvent &incoming : reply.events)
+            {
+                if (incoming.seq != nextInboundSeq)
+                {
+                    // Already delivered (duplicate) or a gap: the server resends from the
+                    // first unacknowledged seq, so skipping preserves exactly-once, in-order.
+                    continue;
+                }
+                ++nextInboundSeq;
+                incoming.event.origin = EventOrigin::Network;
+                incoming.event.shareable = false;
+                incoming.event.timestamp = -1;
+                inboundEvents.push_back(std::move(incoming.event));
+                eventsReceived.fetch_add(1);
+            }
         }
 
         replicator.replaceAll(reply.objects);
@@ -269,6 +316,30 @@ void NetworkClient::sendLeave()
             exchange(leave, ignored);
         }
     }
+}
+
+void NetworkClient::sendEvent(const Event &event)
+{
+    if (event.type == 0 || isReplayControl(event.type))
+    {
+        return;
+    }
+    std::lock_guard<std::mutex> lock(eventMutex);
+    outgoingEvents.push_back({nextOutgoingSeq++, event});
+}
+
+std::vector<Event> NetworkClient::takeReceivedEvents()
+{
+    std::vector<Event> events;
+    std::lock_guard<std::mutex> lock(eventMutex);
+    events.swap(inboundEvents);
+    return events;
+}
+
+std::size_t NetworkClient::pendingOutgoingEvents() const
+{
+    std::lock_guard<std::mutex> lock(eventMutex);
+    return outgoingEvents.size();
 }
 
 void NetworkClient::sendPlayerState(const NetMessage &message)

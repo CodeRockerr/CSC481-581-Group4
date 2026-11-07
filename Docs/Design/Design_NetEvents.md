@@ -1,0 +1,122 @@
+# Networked Events (Milestone 4)
+
+Owner: Sai. Builds on `Design_Events.md` (EventManager, Event, ReplayController).
+
+## Model: server-centric routing, client-simulated movement
+
+- A client raises an event locally. The local EventManager handles it right away, so input
+  stays responsive.
+- If the event is `shareable`, `Origin::Local`, and not a replay control, `NetEventBridge`
+  hands it to `NetworkClient::sendEvent`.
+- The server validates it, puts it in arrival order, and appends it to the queue of every
+  other client. The sender is not echoed its own event.
+- Each recipient's `NetEventBridge::pump()` raises the events into its own EventManager as
+  `Origin::Network`, `shareable = false`. They run in `dispatch()` on the main thread.
+- Snapshots keep synchronizing transforms. Events say that something happened.
+
+Why server-centric: it matches the existing REQ/REP server. One process decides the order, so
+every client sees the same sequence. It is also the place to enforce authority later, using
+`Server::setEventFilter`. The cost is one extra hop, and the server is a single point of failure.
+
+## Wire format
+
+`Packet` gained `events` and `eventAck`. They are written as a trailer after the object list,
+only when there is something to send. A packet without events is byte-identical to the
+Milestone 3 packet, so older tools still decode it.
+
+| Part | Binary | Text |
+| --- | --- | --- |
+| Trailer header | `u64 ack, u32 count` | `E <ack> <count>` line |
+| Each event | `u64 seq, u32 len, record` | one line: `<seq> <event tokens>` |
+| Strings | `u32 length + bytes` | `~` + percent-encoding (empty string is `~`) |
+
+`EventCodec` writes every field explicitly: type, timestamp, priority, id, source, target, and a
+payload tag with the payload. `origin` and `shareable` are **not** sent; the receiver decides
+them. Custom payloads travel as `EventFields` (int64, double, bool, string). Floats use `%.9g`
+and doubles `%.17g` in text, so both formats round-trip exactly. Decoders reject truncation,
+trailing bytes, unknown tags, type 0, and oversize strings (4096) or field maps (256).
+
+## Reliability: per-link sequence numbers and cumulative acks
+
+Each client<->server link has two independent streams, each numbered 1, 2, 3...
+
+- **Client to server.** The client keeps events in `outgoingEvents` until the server's
+  `eventAck` covers them, and resends all unacknowledged events (up to 64) on every exchange.
+  The server accepts `seq == nextExpected`, drops `seq < nextExpected` as a duplicate, and
+  stops at a gap. Acknowledging only the contiguous prefix means a lost reply or a request
+  timeout loses nothing and applies nothing twice.
+- **Server to client.** Each client has a pending queue on the server. Every reply carries the
+  first 64 unacknowledged events plus the highest seq the server has received. The client
+  accepts only `seq == nextInbound`, and its next request acknowledges it. The queue is
+  released only on that ack.
+
+Delivery is therefore exactly-once and in order per link, and queueing under one mutex makes
+the order identical across recipients. Fan-out rides on the existing REQ/REP exchange, so
+there are no unsolicited sends. Delivery latency is about one client send interval (16 ms
+default) plus the round trip.
+
+## Server authority
+
+- The server overwrites `id.ownerId` with the authenticated client id. A client cannot forge
+  another client's EventIds.
+- Replay controls and type 0 are rejected. A rejected event is acknowledged, not resent.
+- `setEventFilter(fn)` can veto an event (return false) for game-specific rules.
+- `broadcastEvent(e)` sends a server-authored event (owner 0) to every client.
+
+## Identity and clocks
+
+- Objects use `(ownerId, netId)`. Locally, owner 0 means "mine". `NetEventBridge` maps
+  0 to the client id on send and back on receive. Games that need to map a remote
+  `(owner, netId)` to a local GameObject override this with `setObjectMappers`.
+- The sender's timestamp is informational only. The receiving client re-stamps with its own
+  EventManager clock, so a remote player's clock is never compared with a local one. Server
+  arrival order defines ordering, and local arrival time defines when the event is handled.
+- During replay playback, EventManager already rejects Network-origin gameplay events, and the
+  bridge never publishes Replay-origin events. Network replay is out of scope.
+
+## Spawn events and snapshot objects
+
+One owner creates remote objects: the snapshot (`NetReplicator`). A networked Spawn event
+must not create an object. It tells a client that an existing actor respawned at a named point,
+and the receiving handler moves the existing replica. Games must not instantiate a replica from
+a Spawn event.
+
+## Using it in a game
+
+```cpp
+NetworkClient client("127.0.0.1", 5555);
+client.connect();
+EventManager events(timeline);
+NetEventBridge bridge(events, client);    // after connect(): sets the owner id
+
+// per frame, on the main thread:
+bridge.pump();       // network -> EventManager
+events.dispatch();   // handlers run here
+
+Event death;
+death.type = EventTypes::Death;
+death.shareable = true;                  // opt in to networking
+death.payload = DeathEvent{"lava"};
+events.raise(death);
+```
+
+## Tests
+
+`Tests/NetEventsTest.cpp` (`net_events_test`): codec round trips in both formats, truncation
+and trailing-byte rejection, M3 packet size unchanged, loopback delivery in both wire
+formats (identity, no echo, a 150-event burst in order and once, non-shareable and
+replay events stay local, filter rejection, both directions, server broadcast), and a raw-socket test of
+retransmission, gaps, redelivery until ack, and spoofed owner ids.
+
+```sh
+cmake --build build --target net_events_test
+ctest --test-dir build -R net_events_test --output-on-failure
+```
+
+## Limits
+
+- Go-back-N resend wastes bandwidth under heavy loss. Fine for LAN, but not tuned.
+- Events reach every other client; there is no interest filtering or per-room routing.
+- The cap is 64 events per packet per direction. A larger burst drains over several exchanges.
+- A client that times out loses its queue (it rejoins with a fresh link).
+- Server-side authority is a hook, not a rule set. Games supply the rules.

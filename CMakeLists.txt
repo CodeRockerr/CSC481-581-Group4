@@ -148,6 +148,11 @@ if(BUILD_TESTING)
     add_executable(event_chain_test Tests/EventChainTest.cpp)
     target_link_libraries(event_chain_test PRIVATE engine)
     add_test(NAME event_chain_test COMMAND event_chain_test)
+    add_executable(net_events_test Tests/NetEventsTest.cpp Engine/src/Server.cpp)
+    target_include_directories(net_events_test PRIVATE Engine/include)
+    target_link_libraries(net_events_test PRIVATE engine)
+    add_test(NAME net_events_test COMMAND net_events_test)
+    set_tests_properties(net_events_test PROPERTIES TIMEOUT 60)
     set_tests_properties(engine_events_test PROPERTIES
         ENVIRONMENT "SDL_VIDEODRIVER=dummy;SDL_RENDER_DRIVER=software"
         TIMEOUT 15

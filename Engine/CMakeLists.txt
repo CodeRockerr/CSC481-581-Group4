@@ -15,6 +15,8 @@ add_library(engine STATIC
     src/NetProtocol.cpp
     src/NetReplicator.cpp
     src/NetworkClient.cpp
+    src/EventCodec.cpp
+    src/NetEventBridge.cpp
     src/PeerSession.cpp
     src/GamePlaySystems.cpp
     src/EventManager.cpp
