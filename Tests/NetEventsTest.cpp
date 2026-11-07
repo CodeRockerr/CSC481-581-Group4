@@ -14,10 +14,14 @@
 #include "Event.h"
 #include "EventCodec.h"
 #include "EventManager.h"
+#include "Components.h"
+#include "GamePlayEvents.h"
+#include "InputSystem.h"
 #include "NetEventBridge.h"
 #include "NetProtocol.h"
 #include "NetworkClient.h"
 #include "Server.h"
+#include "SpawnPoint.h"
 
 namespace
 {
@@ -224,6 +228,42 @@ namespace
         }
     };
 
+    struct GameplayNode : Node
+    {
+        GameObjectManager objects;
+        Camera camera;
+        GameplayEvents gameplay;
+        int deaths = 0;
+        int spawns = 0;
+
+        GameplayNode(uint16_t port, WireFormat format)
+            : Node(port, format), gameplay(manager, objects, camera)
+        {
+            gameplay.setShareLifecycleEvents(true);
+            GameplayEvents::Rules rules;
+            rules.onDeath = [this](GameObject &, const Event &) -> std::optional<std::string>
+            {
+                ++deaths;
+                return "default";
+            };
+            rules.onSpawned = [this](GameObject &, const Event &) { ++spawns; };
+            gameplay.setRules(std::move(rules));
+            auto &point = objects.create("default");
+            point.add<Transform>(100, 100, 10, 10);
+            point.add<SpawnPoint>("default");
+        }
+
+        GameObject &actor(uint32_t owner, uint32_t netId)
+        {
+            auto &object = objects.create();
+            object.add<Transform>(0, 0, 10, 10);
+            object.add<PlayerIntent>();
+            auto &identity = object.add<NetworkIdentity>(owner, NetKind::Player, netId);
+            identity.isReplica = owner != client.getClientId();
+            return object;
+        }
+    };
+
     void testLoopback(WireFormat format, uint16_t port)
     {
         Server server(port);
@@ -244,7 +284,7 @@ namespace
             death.type = EventTypes::Death;
             death.shareable = true;
             death.payload = DeathEvent{"fell into lava"};
-            death.target = {0, 7}; // local object 7 -> (idA, 7) on the wire
+            death.target = {idA, 7};
             a.manager.raise(death);
             a.spin(50);
             b.spin(3000, [&]
@@ -630,6 +670,128 @@ namespace
         server.stop();
         serverThread.join();
     }
+    void testGameplayIntegration(WireFormat format, uint16_t port)
+    {
+        Server server(port);
+        std::thread serverThread([&] { server.run(); });
+        std::this_thread::sleep_for(std::chrono::milliseconds(300));
+        {
+            GameplayNode a(port, format), b(port, format);
+            auto &owned = a.actor(a.client.getClientId(), 41);
+            auto &replica = b.actor(a.client.getClientId(), 41);
+            auto &serverA = a.actor(0, 77);
+            auto &serverB = b.actor(0, 77);
+            auto until = [&](const std::function<bool()> &condition)
+            {
+                return waitFor(3000, [&]
+                {
+                    a.bridge->pump();
+                    a.manager.dispatch();
+                    b.bridge->pump();
+                    b.manager.dispatch();
+                    return condition();
+                });
+            };
+            auto settle = [&]() { a.spin(200); b.spin(200); a.spin(100); };
+
+            Event input;
+            input.type = EventTypes::Input;
+            input.target = EventObjects::of(owned);
+            input.payload = InputEvent{InputActions::MoveX, 1};
+            server.broadcastEvent(input);
+            require(until([&]
+            {
+                return owned.get<PlayerIntent>()->moveX == 1 && replica.get<PlayerIntent>()->moveX == 1;
+            }), "server event resolves client-owned actor and replica");
+
+            input.target = EventObjects::of(serverA);
+            input.shareable = true;
+            a.manager.raise(input);
+            require(until([&] { return serverB.get<PlayerIntent>()->moveX == 1; }),
+                    "client event preserves server-owned target");
+            bool foundTarget = false;
+            for (const auto &event : b.received)
+                if (event.type == EventTypes::Input && event.target == EventObjects::of(serverB))
+                {
+                    foundTarget = true;
+                    require(EventObjects::isNone(event.source), "empty source remains empty on the wire");
+                }
+            require(foundTarget, "received input names the server-owned actor");
+
+            Event notice;
+            notice.type = EventTypes::FirstGame + 9;
+            server.broadcastEvent(notice);
+            server.broadcastEvent(notice);
+            require(until([&]
+            {
+                return a.count(notice.type, EventOrigin::Network) == 2 &&
+                       b.count(notice.type, EventOrigin::Network) == 2;
+            }), "both server broadcasts reach both clients");
+            std::vector<EventId> idsA, idsB;
+            for (const auto &event : a.received) if (event.type == notice.type) idsA.push_back(event.id);
+            for (const auto &event : b.received) if (event.type == notice.type) idsB.push_back(event.id);
+            for (std::size_t i = 0; i < idsA.size(); ++i)
+                require(idsA[i].ownerId == 0 && idsA[i].sequence != 0 && idsA[i] == idsB[i],
+                        "server event keeps one nonzero identity across clients");
+            require(idsA[0].sequence != idsA[1].sequence, "distinct broadcasts have distinct server IDs");
+
+            const auto routed = server.getEventsRouted();
+            a.gameplay.raiseDeath(owned, nullptr, "local death");
+            require(until([&] { return a.spawns == 1 && b.spawns == 1; }), "death respawns owner and replica");
+            settle();
+            require(a.deaths == 1 && b.deaths == 0, "only the owner applies death rules");
+            require(a.spawns == 1 && b.spawns == 1, "one death produces one spawn per client");
+            require(a.count(EventTypes::Spawn, EventOrigin::Network) == 0 &&
+                    b.count(EventTypes::Spawn, EventOrigin::Network) == 1,
+                    "replica does not rebroadcast a generated spawn");
+            require(server.getEventsRouted() == routed + 2, "only the authoritative death and spawn are routed");
+            for (const auto &event : b.received)
+                if (event.type == EventTypes::Spawn)
+                    require(EventObjects::isNone(event.source), "shared spawn omits an optional offline point reference");
+
+            a.objects.findByName("default")->add<NetworkIdentity>(0, NetKind::Unknown, 900).isReplica = true;
+            b.objects.findByName("default")->add<NetworkIdentity>(0, NetKind::Unknown, 900).isReplica = true;
+
+            Event death;
+            death.type = EventTypes::Death;
+            death.target = EventObjects::of(owned);
+            death.payload = DeathEvent{"server-requested death"};
+            server.broadcastEvent(death);
+            require(until([&] { return a.spawns == 2 && b.spawns == 2; }),
+                    "server-requested death is resolved by the actor owner");
+            settle();
+            require(a.deaths == 2 && b.deaths == 0 && a.spawns == 2 && b.spawns == 2,
+                    "network-origin death does not duplicate replica consequences");
+            bool foundSource = false;
+            for (const auto &event : b.received)
+                if (event.type == EventTypes::Spawn && event.source == EventObject{0, 900})
+                    foundSource = true;
+            require(foundSource, "shared spawn preserves a server-owned point reference");
+
+            death.target = EventObjects::of(serverA);
+            server.broadcastEvent(death);
+            require(until([&]
+            {
+                return a.count(EventTypes::Death, EventOrigin::Network) == 2 &&
+                       b.count(EventTypes::Death, EventOrigin::Network) == 3;
+            }), "server-owned death reaches both replicas");
+            require(a.deaths == 2 && b.deaths == 0 && a.spawns == 2 && b.spawns == 2,
+                    "clients do not author respawns for server-owned actors");
+
+            Event spawn;
+            spawn.type = EventTypes::Spawn;
+            spawn.target = EventObjects::of(serverA);
+            spawn.payload = SpawnEvent{"default"};
+            server.broadcastEvent(spawn);
+            require(until([&]
+            {
+                return serverA.get<Transform>()->x == 100 && serverB.get<Transform>()->x == 100;
+            }), "server-authored spawn moves existing replicas");
+            require(a.spawns == 3 && b.spawns == 3, "server-owned spawn applies once per client");
+        }
+        server.stop();
+        serverThread.join();
+    }
 }
 
 int main()
@@ -641,6 +803,8 @@ int main()
     testDuplicatesAndGaps(5613);
     testOfflineRefsAndPlayback(5614);
     testDisconnects(5615);
+    testGameplayIntegration(WireFormat::Binary, 5616);
+    testGameplayIntegration(WireFormat::Text, 5617);
     std::cout << "net_events_test passed (" << checks << " checks)\n";
     return 0;
 }

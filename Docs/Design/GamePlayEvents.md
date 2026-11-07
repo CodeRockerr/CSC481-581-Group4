@@ -17,7 +17,7 @@ Producers never call handlers. Handlers may raise child events. Those run in the
 ### Event field conventions
 - **Collision:** `source` = player, `target` = touched object, `normal` points from the other object toward the player, `trigger` = `Collider::isTrigger`.
 - **Death:** `source` = cause (death zone, hazard, or none), `target` = victim, `reason` = text.
-- **Spawn:** `source` = spawn point object (if found), `target` = subject, `spawnPoint` = name.
+- **Spawn:** `source` = spawn point object when it can be referenced, `target` = subject, `spawnPoint` = name. Shared spawns omit an offline point's optional source reference and resolve the point by name instead.
 - **Input:** `target` = player, `action` and `value` as in `InputActions`.
 - Use `EventObjects::of(obj)` to create object references: `{ownerId, netId}` when networked, otherwise `{EventObjects::OfflineOwner, localId}`. `OfflineOwner` is reserved as `0xFFFFFFFFu`; owner `0` identifies the server. `EventObjects::resolve` uses local IDs only for offline references and matches both owner ID and network ID for network references. It returns `nullptr` when no matching object exists, and handlers ignore unresolved targets.
 
@@ -41,6 +41,12 @@ gameplay.produceOutOfBounds(playerId, WorldHeight + 200.0f, "fell out of the sky
 ```
 
 Game-specific hazards (for example Kuromi in Hello Kitty) use `Rules::onCollision`. Check for the hazard component on `other`, then call `gameplay.raiseDeath(player, &other, "reason")`.
+
+Death rules run only for authoritative actors. A `NetworkIdentity` with `isReplica = true`
+causes the death handler to skip game rules and child spawns; replicas receive the owner's
+Spawn event instead. `NetReplicator` sets this flag automatically for remote objects.
+Games that create replicas manually must set it themselves. A received Spawn still moves
+the replica and invokes `onSpawned`.
 
 ## 3. Engine integration
 

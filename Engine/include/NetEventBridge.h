@@ -33,9 +33,6 @@ public:
     // the thread that calls EventManager::dispatch. Returns the number raised.
     std::size_t pump();
 
-    // Object identity. Local objects use owner 0; on the wire they are (clientId, netId).
-    // Defaults translate owner 0 <-> this client's id. Games that need more (for example
-    // mapping a remote (owner, netId) to a local GameObject) override these.
     void setObjectMappers(ObjectMapper toWire, ObjectMapper fromWire);
 
     // Events that were raised locally but kept off the network because they reference an

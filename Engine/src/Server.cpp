@@ -314,10 +314,10 @@ void Server::broadcastEvent(Event event)
     {
         return;
     }
-    event.id.ownerId = 0;
     event.origin = EventOrigin::Network;
     event.shareable = false;
     std::lock_guard<std::mutex> lock(eventMutex);
+    event.id = {0, nextServerEventSequence++};
     for (auto &entry : eventLinks)
     {
         queueForClient(entry.second, event);

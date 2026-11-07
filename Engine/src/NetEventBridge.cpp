@@ -6,14 +6,11 @@ NetEventBridge::NetEventBridge(EventManager &eventManager, NetworkClient &networ
     const uint32_t self = client.getClientId();
     events.setOwnerId(self);
 
-    toWire = [self](const EventObject &object)
+    toWire = [](const EventObject &object)
     {
-        return object.ownerId == 0 ? EventObject{self, object.netId} : object;
+        return object;
     };
-    fromWire = [self](const EventObject &object)
-    {
-        return object.ownerId == self ? EventObject{0, object.netId} : object;
-    };
+    fromWire = toWire;
 
     subscription = events.subscribeAll([this](const Event &event)
                                        {

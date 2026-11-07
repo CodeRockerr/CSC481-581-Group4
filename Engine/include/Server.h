@@ -113,6 +113,7 @@ private:
     mutable std::mutex eventMutex;
     std::map<uint32_t, EventLink> eventLinks;
     EventFilter eventFilter;
+    uint64_t nextServerEventSequence = 1;
     std::atomic<uint64_t> eventsRouted{0};
     std::atomic<uint64_t> duplicateEvents{0};
     std::atomic<uint64_t> rejectedEvents{0};

@@ -6,6 +6,7 @@
 #include "EventObjects.h"
 #include "GamePlaySystems.h"
 #include "InputSystem.h"
+#include "NetworkIdentity.h"
 #include "PlayerIntent.h"
 #include "SideScrollTrigger.h"
 
@@ -150,7 +151,11 @@ EventId GameplayEvents::raiseSpawn(GameObject &subject, const std::string &spawn
     event.type = EventTypes::Spawn;
     event.priority = EventPriority::High;
     if (GameObject *point = GameplaySystems::findSpawnPointByName(objects, spawnPoint))
-        event.source = EventObjects::of(*point);
+    {
+        const auto source = EventObjects::of(*point);
+        if (!shareLifecycle || !EventObjects::isOffline(source))
+            event.source = source;
+    }
     event.target = EventObjects::of(subject);
     event.payload = SpawnEvent{spawnPoint};
     event.shareable = shareLifecycle;
@@ -256,6 +261,8 @@ void GameplayEvents::onDeath(const Event &event)
 {
     GameObject *victim = EventObjects::resolve(objects, event.target);
     if (!victim)
+        return;
+    if (const auto *identity = victim->get<NetworkIdentity>(); identity && identity->isReplica)
         return;
     const std::optional<std::string> spawn =
         rules.onDeath ? rules.onDeath(*victim, event) : std::optional<std::string>(defaultSpawnFor(event));
