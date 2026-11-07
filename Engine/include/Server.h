@@ -52,6 +52,9 @@ public:
     uint64_t getEventsRouted() const { return eventsRouted.load(); }
     uint64_t getDuplicateEventsDropped() const { return duplicateEvents.load(); }
     uint64_t getEventsRejected() const { return rejectedEvents.load(); }
+    // Number of clients that currently have a delivery queue. A client that leaves or times
+    // out loses its queue immediately, so this tracks getClientCount().
+    std::size_t getEventLinkCount() const;
 
     void run();
     void stop();
@@ -107,7 +110,7 @@ private:
     std::vector<ClientThread> clientThreads;
     uint32_t nextClientId = 1;
 
-    std::mutex eventMutex;
+    mutable std::mutex eventMutex;
     std::map<uint32_t, EventLink> eventLinks;
     EventFilter eventFilter;
     std::atomic<uint64_t> eventsRouted{0};

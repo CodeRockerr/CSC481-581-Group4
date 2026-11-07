@@ -2,6 +2,7 @@
 #include <chrono>
 #include <cstdlib>
 #include <cstring>
+#include <functional>
 #include <iostream>
 #include <memory>
 #include <string>
@@ -446,6 +447,189 @@ namespace
         server.stop();
         serverThread.join();
     }
+
+    // ------------------------------------------------- offline refs and local replay
+
+    void testOfflineRefsAndPlayback(uint16_t port)
+    {
+        Server server(port);
+        std::thread serverThread([&]
+                                 { server.run(); });
+        std::this_thread::sleep_for(std::chrono::milliseconds(300));
+
+        {
+            Node a(port, WireFormat::Binary);
+            Node b(port, WireFormat::Binary);
+
+            // 1. An event that names an offline object stays on the machine that raised it.
+            Event offline;
+            offline.type = EventTypes::Death;
+            offline.shareable = true;
+            offline.payload = DeathEvent{"offline"};
+            offline.target = {EventObjects::OfflineOwner, 3};
+            a.manager.raise(offline);
+            a.spin(50);
+            b.spin(400);
+            require(b.count(EventTypes::Death, EventOrigin::Network) == 0, "offline-reference event never reaches B");
+            require(a.count(EventTypes::Death, EventOrigin::Local) == 1, "A still handled its own offline event");
+            require(a.bridge->getLocalOnlyCount() == 1, "bridge counted the event it kept local");
+
+            // 2. A normal event right after it still goes through (the filter did not wedge the link).
+            Event normal;
+            normal.type = EventTypes::Death;
+            normal.shareable = true;
+            normal.payload = DeathEvent{"normal"};
+            normal.target = {0, 4};
+            a.manager.raise(normal);
+            a.spin(50);
+            b.spin(3000, [&]
+                   { return b.count(EventTypes::Death, EventOrigin::Network) >= 1; });
+            require(b.count(EventTypes::Death, EventOrigin::Network) == 1, "normal event delivered once");
+
+            // 3. Local replay: network events are discarded while playing back...
+            b.manager.setPlaybackMode(true);
+            Event during;
+            during.type = EventTypes::Death;
+            during.shareable = true;
+            during.payload = DeathEvent{"during playback"};
+            during.target = {0, 5};
+            a.manager.raise(during);
+            a.spin(50);
+            b.spin(500);
+            require(b.count(EventTypes::Death, EventOrigin::Network) == 1, "no live event reaches B during playback");
+            require(b.bridge->getDiscardedCount() >= 1, "bridge discarded the event that arrived during playback");
+
+            // ...and are delivered again once playback ends (and the discarded one is not replayed late).
+            b.manager.setPlaybackMode(false);
+            Event after;
+            after.type = EventTypes::Death;
+            after.shareable = true;
+            after.payload = DeathEvent{"after playback"};
+            after.target = {0, 6};
+            a.manager.raise(after);
+            a.spin(50);
+            b.spin(3000, [&]
+                   { return b.count(EventTypes::Death, EventOrigin::Network) >= 2; });
+            require(b.count(EventTypes::Death, EventOrigin::Network) == 2, "exactly one more event after playback ends");
+        }
+
+        // 4. The server itself refuses offline references from a client that does not use the bridge.
+        void *context = zmq_ctx_new();
+        uint32_t idA = 0, idB = 0;
+        void *rawA = openLink(context, port, idA);
+        void *rawB = openLink(context, port, idB);
+        const uint64_t rejectedBefore = server.getEventsRejected();
+        NetEvent bad = netEvent(1, "bad");
+        bad.event.source = {EventObjects::OfflineOwner, 9};
+        Packet state, reply;
+        state.type = PacketType::State;
+        state.sender = idA;
+        state.events = {bad};
+        require(roundTrip(rawA, state, reply), "raw client sends an offline reference");
+        require(reply.eventAck == 1, "event is acknowledged so the client stops resending it");
+        require(server.getEventsRejected() == rejectedBefore + 1, "server counted the rejection");
+        Packet poll;
+        poll.type = PacketType::State;
+        poll.sender = idB;
+        require(roundTrip(rawB, poll, reply) && reply.events.empty(), "nothing was forwarded to the other client");
+        zmq_close(rawA);
+        zmq_close(rawB);
+        zmq_ctx_destroy(context);
+
+        server.stop();
+        serverThread.join();
+    }
+
+    // ------------------------------------------------------------ disconnected clients
+
+    bool waitFor(int ms, const std::function<bool()> &condition)
+    {
+        const auto end = std::chrono::steady_clock::now() + std::chrono::milliseconds(ms);
+        while (std::chrono::steady_clock::now() < end)
+        {
+            if (condition())
+                return true;
+            std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        }
+        return condition();
+    }
+
+    void testDisconnects(uint16_t port)
+    {
+        Server server(port);
+        server.setClientTimeoutMs(600);
+        std::thread serverThread([&]
+                                 { server.run(); });
+        std::this_thread::sleep_for(std::chrono::milliseconds(300));
+        void *context = zmq_ctx_new();
+
+        uint32_t idA = 0, idB = 0, idC = 0;
+        void *a = openLink(context, port, idA);
+        void *b = openLink(context, port, idB);
+        void *c = openLink(context, port, idC);
+        require(waitFor(2000, [&]
+                        { return server.getClientCount() == 3 && server.getEventLinkCount() == 3; }),
+                "three clients, three delivery queues");
+
+        // A sends an event, then leaves cleanly. The event was already queued for the others.
+        Packet state, reply;
+        state.type = PacketType::State;
+        state.sender = idA;
+        state.events = {netEvent(1, "from A")};
+        require(roundTrip(a, state, reply) && reply.eventAck == 1, "A's event is accepted");
+        Packet leave;
+        leave.type = PacketType::Leave;
+        leave.sender = idA;
+        require(roundTrip(a, leave, reply), "A leaves");
+        require(waitFor(2000, [&]
+                        { return server.getClientCount() == 2 && server.getEventLinkCount() == 2; }),
+                "A's delivery queue is released when it leaves");
+
+        Packet pollB;
+        pollB.type = PacketType::State;
+        pollB.sender = idB;
+        require(roundTrip(b, pollB, reply) && reply.events.size() == 1, "B still gets the event A sent before leaving");
+        require(std::get<SpawnEvent>(reply.events[0].event.payload).spawnPoint == "from A", "and it is the right one");
+        pollB.eventAck = reply.events[0].seq;
+
+        // A server broadcast after A left is queued only for the clients that are still here.
+        Event notice;
+        notice.type = EventTypes::Spawn;
+        notice.payload = SpawnEvent{"server notice"};
+        server.broadcastEvent(notice);
+        require(roundTrip(b, pollB, reply) && reply.events.size() == 1, "B receives the broadcast");
+        pollB.eventAck = reply.events[0].seq;
+
+        // C goes silent without leaving (a crash). The server drops it after the timeout.
+        // B keeps polling meanwhile, because a client that stops polling would time out too.
+        require(waitFor(5000, [&]
+                        {
+                            Packet keepAlive;
+                            roundTrip(b, pollB, keepAlive);
+                            return server.getClientCount() == 1 && server.getEventLinkCount() == 1;
+                        }),
+                "a silent client times out and its queue is released");
+        require(roundTrip(b, pollB, reply) && reply.events.empty(), "B is unaffected by the others disconnecting");
+
+        // A new client gets a fresh link: nothing from the departed clients, sequence from 1.
+        uint32_t idD = 0;
+        void *d = openLink(context, port, idD);
+        require(idD != idA && idD != idC, "a new client gets a new id");
+        server.broadcastEvent(notice);
+        Packet pollD;
+        pollD.type = PacketType::State;
+        pollD.sender = idD;
+        require(roundTrip(d, pollD, reply) && reply.events.size() == 1, "new client sees only events after it joined");
+        require(reply.events[0].seq == 1, "its delivery sequence starts at 1");
+
+        zmq_close(a);
+        zmq_close(b);
+        zmq_close(c);
+        zmq_close(d);
+        zmq_ctx_destroy(context);
+        server.stop();
+        serverThread.join();
+    }
 }
 
 int main()
@@ -455,6 +639,8 @@ int main()
     testLoopback(WireFormat::Binary, 5611);
     testLoopback(WireFormat::Text, 5612);
     testDuplicatesAndGaps(5613);
+    testOfflineRefsAndPlayback(5614);
+    testDisconnects(5615);
     std::cout << "net_events_test passed (" << checks << " checks)\n";
     return 0;
 }

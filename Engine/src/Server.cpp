@@ -8,6 +8,7 @@
 #include <string>
 
 #include "Components.h"
+#include "EventObjects.h"
 #include "NetworkIdentity.h"
 
 namespace
@@ -296,6 +297,12 @@ void Server::forgetEventLink(uint32_t clientId)
     eventLinks.erase(clientId);
 }
 
+std::size_t Server::getEventLinkCount() const
+{
+    std::lock_guard<std::mutex> lock(eventMutex);
+    return eventLinks.size();
+}
+
 void Server::queueForClient(EventLink &link, const Event &event)
 {
     link.pending.push_back({link.nextOutgoing++, event});
@@ -353,7 +360,10 @@ void Server::acceptEvents(uint32_t clientId, Packet &incoming)
         event.id.ownerId = clientId;
         event.origin = EventOrigin::Network;
         event.shareable = false;
+        // Offline references (EventObjects::OfflineOwner) name objects by a local id that means
+        // nothing on another machine, so they must never be forwarded.
         if (event.type == 0 || isReplayControl(event.type) ||
+            EventObjects::isOffline(event.source) || EventObjects::isOffline(event.target) ||
             (eventFilter && !eventFilter(event, clientId)))
         {
             rejectedEvents.fetch_add(1);

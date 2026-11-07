@@ -21,6 +21,12 @@ NetEventBridge::NetEventBridge(EventManager &eventManager, NetworkClient &networ
         {
             return;
         }
+        // An offline reference is a local GameObject id; it means nothing to other machines.
+        if (EventObjects::isOffline(event.source) || EventObjects::isOffline(event.target))
+        {
+            ++localOnly;
+            return;
+        }
         Event wire = event;
         wire.source = toWire(wire.source);
         wire.target = toWire(wire.target);
@@ -46,9 +52,22 @@ void NetEventBridge::setObjectMappers(ObjectMapper wireMapper, ObjectMapper loca
 
 std::size_t NetEventBridge::pump()
 {
-    std::size_t raised = 0;
-    for (Event &event : client.takeReceivedEvents())
+    std::vector<Event> inbound = client.takeReceivedEvents();
+    // Local replay owns the simulation: live network events must not touch it. They were
+    // already acknowledged, so they are dropped, not held back for later.
+    if (events.isPlaybackMode())
     {
+        discarded += inbound.size();
+        return 0;
+    }
+    std::size_t raised = 0;
+    for (Event &event : inbound)
+    {
+        if (EventObjects::isOffline(event.source) || EventObjects::isOffline(event.target))
+        {
+            ++discarded;
+            continue;
+        }
         event.source = fromWire(event.source);
         event.target = fromWire(event.target);
         events.raise(std::move(event));

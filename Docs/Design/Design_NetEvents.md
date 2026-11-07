@@ -100,6 +100,28 @@ death.payload = DeathEvent{"lava"};
 events.raise(death);
 ```
 
+## Offline references, local replay and disconnects
+
+**Offline references stay local.** `EventObjects::of()` marks an object with no network identity as
+`{OfflineOwner, localId}`. That id only means something on the machine that made it, so such an event is
+never sent. `NetEventBridge` keeps it local and counts it (`getLocalOnlyCount()`). The server also refuses
+it if a client sends one anyway: the event is acknowledged, so the client stops resending it, but it is not
+forwarded and counts as rejected. Network events that arrive carrying an offline reference are discarded.
+Objects that have a `NetworkIdentity` use `{ownerId, netId}`, and `EventObjects::resolve()` finds them on the
+receiving side.
+
+**Local replay stays local.** Replay controls and events with `Origin::Replay` are never sent. While
+`EventManager::isPlaybackMode()` is true, `NetEventBridge::pump()` discards network events instead of raising
+them (`getDiscardedCount()`). They were already acknowledged, so they are dropped, not delivered late. A game
+that supports replay while connected should also skip `sync()` and `publish()` during playback. Cave Ninja
+does this. Its replay is offline only, so the guard is a safety net there.
+
+**Disconnected clients.** When a client sends Leave, or is silent past the server's timeout, the server
+releases its delivery queue (`getEventLinkCount()` follows `getClientCount()`). Events that client sent
+earlier were already queued for the others and are still delivered. A broadcast after it left is queued only
+for connected clients. A client that joins later gets a new id and a fresh link, starting at sequence 1, and
+never sees events sent before it joined.
+
 ## Tests
 
 `Tests/NetEventsTest.cpp` (`net_events_test`): codec round trips in both formats, truncation
@@ -118,5 +140,5 @@ ctest --test-dir build -R net_events_test --output-on-failure
 - Go-back-N resend wastes bandwidth under heavy loss. Fine for LAN, but not tuned.
 - Events reach every other client; there is no interest filtering or per-room routing.
 - The cap is 64 events per packet per direction. A larger burst drains over several exchanges.
-- A client that times out loses its queue (it rejoins with a fresh link).
+- A client that times out loses its queue (it rejoins with a fresh link) and misses events sent while it was away.
 - Server-side authority is a hook, not a rule set. Games supply the rules.
