@@ -3,6 +3,7 @@
 #include <atomic>
 #include <condition_variable>
 #include <cstdint>
+#include <deque>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -10,6 +11,7 @@
 
 #include <zmq.h>
 
+#include "Event.h"
 #include "NetMessage.h"
 #include "NetProtocol.h"
 #include "NetReplicator.h"
@@ -45,6 +47,18 @@ public:
     uint64_t getBytesReceived() const { return bytesReceived.load(); }
     int64_t getLastRoundTripMicros() const { return lastRoundTripMicros.load(); }
     uint32_t getServerClientCount() const { return serverClientCount.load(); }
+
+    // --- Milestone 4 network events -------------------------------------------------------
+    // sendEvent queues a local, shareable event for reliable delivery to the server (which
+    // orders it and fans it out to the other clients). It is retransmitted until the server
+    // acknowledges it, and the server drops duplicates. Safe to call from any thread.
+    void sendEvent(const Event &event);
+    // Events routed to this client since the last call, in the server's authoritative order.
+    // They are marked Origin::Network, not shareable, and stamped (-1) so EventManager::raise
+    // stamps them with the receiver's own clock. The network thread never runs handlers.
+    std::vector<Event> takeReceivedEvents();
+    std::size_t pendingOutgoingEvents() const;
+    uint64_t getEventsReceived() const { return eventsReceived.load(); }
 
     void sendPlayerState(const NetMessage &message);
     std::vector<NetMessage> getLatestMessages();
@@ -82,6 +96,13 @@ private:
     std::atomic<uint64_t> bytesReceived{0};
     std::atomic<int64_t> lastRoundTripMicros{0};
     std::atomic<uint32_t> serverClientCount{0};
+
+    mutable std::mutex eventMutex;
+    std::deque<NetEvent> outgoingEvents; // unacknowledged, in seq order
+    std::vector<Event> inboundEvents;
+    uint64_t nextOutgoingSeq = 1;
+    uint64_t nextInboundSeq = 1;
+    std::atomic<uint64_t> eventsReceived{0};
 
     std::string sendBuffer;
     std::string receiveBuffer;

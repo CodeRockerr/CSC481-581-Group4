@@ -3,7 +3,9 @@
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <deque>
 #include <functional>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -12,6 +14,7 @@
 
 #include <zmq.h>
 
+#include "Event.h"
 #include "GameObjectManager.h"
 #include "NetProtocol.h"
 #include "NetReplicator.h"
@@ -34,6 +37,25 @@ public:
     GameObject &createObject(uint16_t kind, const std::string &name = "");
     GameObjectManager &getObjects() { return objects; }
 
+    // --- Milestone 4 network events -------------------------------------------------------
+    // Server-centric routing: every shareable event from a client is validated, put into
+    // arrival order, and appended to the queue of every OTHER client (the sender already
+    // handled it locally). Each queue drains over the existing REQ/REP exchanges and is
+    // only discarded once the recipient acknowledges it.
+    //
+    // The filter runs on a client thread. Return false to reject (the event is acknowledged
+    // but not forwarded), e.g. to enforce authority rules.
+    using EventFilter = std::function<bool(const Event &event, uint32_t clientId)>;
+    void setEventFilter(EventFilter filter);
+    // Server-authored event (ownerId 0) delivered to every connected client.
+    void broadcastEvent(Event event);
+    uint64_t getEventsRouted() const { return eventsRouted.load(); }
+    uint64_t getDuplicateEventsDropped() const { return duplicateEvents.load(); }
+    uint64_t getEventsRejected() const { return rejectedEvents.load(); }
+    // Number of clients that currently have a delivery queue. A client that leaves or times
+    // out loses its queue immediately, so this tracks getClientCount().
+    std::size_t getEventLinkCount() const;
+
     void run();
     void stop();
 
@@ -47,6 +69,19 @@ private:
         std::thread thread;
         std::shared_ptr<std::atomic<bool>> finished;
     };
+
+    struct EventLink
+    {
+        uint64_t nextExpected = 1; // next seq accepted from this client
+        uint64_t nextOutgoing = 1; // seq given to the next event queued for this client
+        std::deque<NetEvent> pending;
+    };
+
+    void registerEventLink(uint32_t clientId);
+    void forgetEventLink(uint32_t clientId);
+    void acceptEvents(uint32_t clientId, Packet &incoming);
+    void attachEvents(uint32_t clientId, Packet &reply);
+    void queueForClient(EventLink &link, const Event &event);
 
     void simulationLoop();
     void clientLoop(uint32_t clientId, void *socket, std::shared_ptr<std::atomic<bool>> finished);
@@ -74,6 +109,14 @@ private:
     std::mutex threadMutex;
     std::vector<ClientThread> clientThreads;
     uint32_t nextClientId = 1;
+
+    mutable std::mutex eventMutex;
+    std::map<uint32_t, EventLink> eventLinks;
+    EventFilter eventFilter;
+    uint64_t nextServerEventSequence = 1;
+    std::atomic<uint64_t> eventsRouted{0};
+    std::atomic<uint64_t> duplicateEvents{0};
+    std::atomic<uint64_t> rejectedEvents{0};
 
     std::atomic<std::size_t> clientCount{0};
     std::atomic<uint64_t> bytesSent{0};

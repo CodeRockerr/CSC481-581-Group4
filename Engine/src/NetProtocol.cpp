@@ -5,6 +5,8 @@
 #include <cstdlib>
 #include <cstring>
 
+#include "EventCodec.h"
+
 namespace
 {
     constexpr uint32_t kMaxObjects = 1u << 20;
@@ -26,6 +28,24 @@ namespace
         {
             std::memcpy(&out[sizeof(PacketHeader)], packet.objects.data(), body);
         }
+
+        if (!packet.events.empty() || packet.eventAck != 0)
+        {
+            const uint32_t count = static_cast<uint32_t>(
+                packet.events.size() > kMaxEventsPerPacket ? kMaxEventsPerPacket : packet.events.size());
+            out.append(reinterpret_cast<const char *>(&packet.eventAck), sizeof(uint64_t));
+            out.append(reinterpret_cast<const char *>(&count), sizeof(uint32_t));
+            std::string record;
+            for (uint32_t i = 0; i < count; ++i)
+            {
+                record.clear();
+                EventCodec::encodeBinary(packet.events[i].event, record);
+                const uint32_t length = static_cast<uint32_t>(record.size());
+                out.append(reinterpret_cast<const char *>(&packet.events[i].seq), sizeof(uint64_t));
+                out.append(reinterpret_cast<const char *>(&length), sizeof(uint32_t));
+                out.append(record);
+            }
+        }
     }
 
     bool decodeBinary(const char *data, std::size_t size, Packet &out)
@@ -36,10 +56,50 @@ namespace
         }
         PacketHeader header{};
         std::memcpy(&header, data, sizeof(PacketHeader));
-        if (header.count > kMaxObjects ||
-            size != sizeof(PacketHeader) + static_cast<std::size_t>(header.count) * sizeof(ObjectState))
+        const std::size_t objectBytes = static_cast<std::size_t>(header.count) * sizeof(ObjectState);
+        if (header.count > kMaxObjects || size < sizeof(PacketHeader) + objectBytes)
         {
             return false;
+        }
+        out.events.clear();
+        out.eventAck = 0;
+        std::size_t offset = sizeof(PacketHeader) + objectBytes;
+        if (offset != size)
+        {
+            // Event trailer: u64 ack, u32 count, then count * (u64 seq, u32 length, record).
+            if (size - offset < sizeof(uint64_t) + sizeof(uint32_t))
+            {
+                return false;
+            }
+            uint32_t eventCount = 0;
+            std::memcpy(&out.eventAck, data + offset, sizeof(uint64_t));
+            std::memcpy(&eventCount, data + offset + sizeof(uint64_t), sizeof(uint32_t));
+            offset += sizeof(uint64_t) + sizeof(uint32_t);
+            if (eventCount > kMaxEventsPerPacket)
+            {
+                return false;
+            }
+            out.events.resize(eventCount);
+            for (NetEvent &entry : out.events)
+            {
+                uint32_t length = 0;
+                if (size - offset < sizeof(uint64_t) + sizeof(uint32_t))
+                {
+                    return false;
+                }
+                std::memcpy(&entry.seq, data + offset, sizeof(uint64_t));
+                std::memcpy(&length, data + offset + sizeof(uint64_t), sizeof(uint32_t));
+                offset += sizeof(uint64_t) + sizeof(uint32_t);
+                if (size - offset < length || !EventCodec::decodeBinary(data + offset, length, entry.event))
+                {
+                    return false;
+                }
+                offset += length;
+            }
+            if (offset != size)
+            {
+                return false;
+            }
         }
         out.type = static_cast<PacketType>(header.type);
         out.sender = header.sender;
@@ -69,6 +129,21 @@ namespace
                               static_cast<unsigned>(s.frame), s.x, s.y, s.width, s.height, s.velocityX,
                               s.velocityY);
             out.append(line, static_cast<std::size_t>(n));
+        }
+        if (!packet.events.empty() || packet.eventAck != 0)
+        {
+            const std::size_t count = packet.events.size() > kMaxEventsPerPacket ? kMaxEventsPerPacket
+                                                                                  : packet.events.size();
+            n = std::snprintf(line, sizeof(line), "E %llu %zu\n",
+                              static_cast<unsigned long long>(packet.eventAck), count);
+            out.append(line, static_cast<std::size_t>(n));
+            for (std::size_t i = 0; i < count; ++i)
+            {
+                n = std::snprintf(line, sizeof(line), "%llu ", static_cast<unsigned long long>(packet.events[i].seq));
+                out.append(line, static_cast<std::size_t>(n));
+                EventCodec::encodeText(packet.events[i].event, out);
+                out.push_back('\n');
+            }
         }
     }
 
@@ -171,7 +246,44 @@ namespace
             s.flags = static_cast<uint8_t>(flags);
             s.frame = static_cast<uint8_t>(frame);
         }
-        return true;
+
+        out.events.clear();
+        out.eventAck = 0;
+        c.skipSpaces();
+        if (c.p == c.end)
+        {
+            return true;
+        }
+        char marker[4];
+        unsigned long long ack = 0, eventCount = 0;
+        if (!c.token(marker, sizeof(marker)) || marker[0] != 'E' || marker[1] != '\0' || !c.readUnsigned(ack) ||
+            !c.readUnsigned(eventCount) || eventCount > kMaxEventsPerPacket)
+        {
+            return false;
+        }
+        out.eventAck = ack;
+        out.events.resize(static_cast<std::size_t>(eventCount));
+        for (NetEvent &entry : out.events)
+        {
+            unsigned long long seq = 0;
+            if (!c.readUnsigned(seq))
+            {
+                return false;
+            }
+            entry.seq = seq;
+            const char *lineEnd = c.p;
+            while (lineEnd < c.end && *lineEnd != '\n')
+            {
+                ++lineEnd;
+            }
+            if (!EventCodec::decodeText(c.p, lineEnd, entry.event))
+            {
+                return false;
+            }
+            c.p = lineEnd;
+        }
+        c.skipSpaces();
+        return c.p == c.end;
     }
 }
 

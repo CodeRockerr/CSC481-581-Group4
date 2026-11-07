@@ -367,10 +367,13 @@ namespace
         pending.add<NetworkIdentity>(7u, NetKind::Unknown);
         CHECK(EventObjects::isOffline(EventObjects::of(pending)));
 
-        // End to end: a Death aimed at the replica by its network reference reaches the handler.
         int deaths = 0;
         w.gameplay->setRules(holdPlayerRules(deaths));
         w.gameplay->raiseDeath(replica, nullptr, "remote");
+        w.events.dispatch();
+        CHECK(deaths == 0);
+        replicaId.isReplica = false;
+        w.gameplay->raiseDeath(replica, nullptr, "owned");
         w.events.dispatch();
         CHECK(deaths == 1);
     }
