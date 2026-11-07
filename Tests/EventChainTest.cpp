@@ -1,7 +1,3 @@
-// Local event-chain tests for Yeva's gameplay producers and handlers.
-// Covers input intent, collision/death/spawn, re-arming, rules overrides,
-// out-of-bounds handling, listener cleanup, and replay safety.
-
 #include "Camera.h"
 #include "Components.h"
 #include "DeathZone.h"
@@ -11,26 +7,26 @@
 #include "GamePlayEvents.h"
 #include "InputSystem.h"
 #include "PlayerIntent.h"
+#include "ReplayController.h"
 #include "SpawnPoint.h"
 
-#include <cstdint>
+#include <any>
 #include <cstdio>
-#include <cstdlib>
 #include <memory>
 #include <optional>
 #include <string>
-#include <utility>
 #include <vector>
 
-#define CHECK(cond)                                                        \
-    do {                                                                   \
-        if (!(cond)) {                                                     \
-            std::fprintf(stderr, "FAILED %s:%d  %s\n",                    \
-                         __FILE__, __LINE__, #cond);                        \
-            std::exit(1);                                                  \
-        }                                                                  \
+#define CHECK(cond)                                                              \
+    do                                                                           \
+    {                                                                            \
+        if (!(cond))                                                             \
+        {                                                                        \
+            std::fprintf(stderr, "FAILED %s:%d  %s\n", __FILE__, __LINE__, #cond); \
+            std::exit(1);                                                        \
+        }                                                                        \
     } while (0)
-    
+
 namespace
 {
     EventTime fakeNow = 1'000'000; // microseconds; fixed so every raised event is immediately due
@@ -74,6 +70,7 @@ namespace
         }
 
         GameObject &player() { return *objects.find(playerId); }
+        DeathZone &zone() { return *objects.find(zoneId)->get<DeathZone>(); }
         void moveTo(float x, float y)
         {
             player().get<Transform>()->x = x;
@@ -87,6 +84,19 @@ namespace
             return n;
         }
     };
+
+    // "Game over" rule: every death is counted, but nothing respawns the player, so the player
+    // stays inside the zone (or out of bounds) it died in.
+    GameplayEvents::Rules holdPlayerRules(int &deaths)
+    {
+        GameplayEvents::Rules rules;
+        rules.onDeath = [&deaths](GameObject &, const Event &) -> std::optional<std::string>
+        {
+            ++deaths;
+            return std::nullopt;
+        };
+        return rules;
+    }
 
     void testInputBecomesIntent()
     {
@@ -133,7 +143,7 @@ namespace
         CHECK(t->x == 500.0f && t->y == 500.0f);
         const PhysicsBody *b = w.player().get<PhysicsBody>();
         CHECK(b->velocityX == 0.0f && b->velocityY == 0.0f);
-        CHECK(!w.objects.find(w.zoneId)->get<DeathZone>()->armed);
+        CHECK(!w.zone().armed);
     }
 
     void testEnterOnlyAndRearm()
@@ -146,7 +156,7 @@ namespace
         CHECK(w.count(EventTypes::Death) == 1);
 
         w.gameplay->produceCollisions(w.playerId); // player now at the spawn point, left the zone
-        CHECK(w.objects.find(w.zoneId)->get<DeathZone>()->armed);
+        CHECK(w.zone().armed);
 
         w.moveTo(0.0f, 0.0f); // walk back in: dies again
         w.gameplay->produceCollisions(w.playerId);
@@ -177,7 +187,7 @@ namespace
         rules.onDeath = [&](GameObject &, const Event &) -> std::optional<std::string>
         { return std::string("home"); };
         w.gameplay->setRules(rules);
-        w.gameplay->resetTransientState();
+        w.gameplay->resetTransientState(); // fresh start, not a replay restore
         w.gameplay->produceCollisions(w.playerId);
         w.events.dispatch();
         CHECK(spawned == 1);
@@ -220,7 +230,7 @@ namespace
         World w;
         Event e;
         e.type = EventTypes::Death;
-        e.target = {0, 99999}; // no such object
+        e.target = {EventObjects::OfflineOwner, 99999}; // offline reference to a local id that does not exist
         e.payload = DeathEvent{"ghost"};
         w.events.raise(std::move(e));
         w.events.dispatch();
@@ -248,6 +258,196 @@ namespace
         CHECK(w.player().get<Transform>()->x == 500.0f);
         w.events.setPlaybackMode(false);
     }
+
+    // touching + every zone's armed flag survive a capture / reset / restore round trip.
+    void testTransientStateRoundTrip()
+    {
+        World w;
+        int deaths = 0;
+        w.gameplay->setRules(holdPlayerRules(deaths));
+
+        GameObject &second = w.objects.create("zone2");
+        second.add<Transform>(900.0f, 900.0f, 10.0f, 10.0f);
+        second.add<Collider>(0.0f, 0.0f, 0.0f, 0.0f, true);
+        DeathZone &secondZone = second.add<DeathZone>("home");
+
+        w.gameplay->produceCollisions(w.playerId); // player is inside zone 1: triggers it
+        w.events.dispatch();
+        CHECK(deaths == 1);
+        CHECK(!w.zone().armed);
+        secondZone.armed = false; // hand-made state so the two zones differ from the default
+
+        const auto saved = w.gameplay->captureTransientState();
+        CHECK(saved.touching.count(w.zoneId) == 1);
+        CHECK(saved.deathZoneArmed.size() == 2);
+
+        // Control: a plain reset forgets the trigger, so the same position fires again.
+        w.gameplay->resetTransientState();
+        CHECK(w.zone().armed && secondZone.armed);
+        w.gameplay->produceCollisions(w.playerId);
+        CHECK(w.events.pending() == 1); // the extra Collision (and then Death) the reviewer described
+        w.events.clear();
+
+        // Restore puts back the exact state: no second event for the zone we are still inside.
+        w.gameplay->restoreTransientState(saved);
+        CHECK(!w.zone().armed);
+        CHECK(!secondZone.armed);
+        w.gameplay->produceCollisions(w.playerId);
+        CHECK(w.events.pending() == 0);
+        CHECK(deaths == 1);
+    }
+
+    // The out-of-bounds latch is part of the captured state too.
+    void testBoundsLatchRoundTrip()
+    {
+        World w;
+        int deaths = 0;
+        w.gameplay->setRules(holdPlayerRules(deaths));
+        w.objects.find(w.zoneId)->active = false; // isolate from the death zone
+        w.moveTo(0.0f, 5000.0f);
+
+        w.gameplay->produceOutOfBounds(w.playerId, 2000.0f);
+        w.events.dispatch();
+        CHECK(deaths == 1); // player stays below the kill line
+
+        const auto saved = w.gameplay->captureTransientState();
+        CHECK(saved.boundsLatched);
+
+        w.gameplay->resetTransientState(); // control: reset forgets the latch
+        w.gameplay->produceOutOfBounds(w.playerId, 2000.0f);
+        CHECK(w.events.pending() == 1);
+        w.events.clear();
+
+        w.gameplay->restoreTransientState(saved);
+        w.gameplay->produceOutOfBounds(w.playerId, 2000.0f);
+        CHECK(w.events.pending() == 0);
+        CHECK(deaths == 1);
+    }
+
+    // Offline references and network references are different kinds. Owner 0 is the SERVER's id,
+    // not "local", and a replica's local id is unrelated to its network id.
+    void testEventObjectReferences()
+    {
+        World w;
+
+        // Offline object (no NetworkIdentity): offline reference by local id.
+        const EventObject offline = EventObjects::of(w.player());
+        CHECK(offline.ownerId == EventObjects::OfflineOwner && offline.netId == w.playerId);
+        CHECK(EventObjects::isOffline(offline));
+        CHECK(EventObjects::resolve(w.objects, offline) == &w.player());
+
+        // Replica owned by client 7 whose local id differs from its network id.
+        GameObject &replica = w.objects.create("replica");
+        NetworkIdentity &replicaId = replica.add<NetworkIdentity>(7u, NetKind::Unknown, 900u);
+        replicaId.isReplica = true;
+        CHECK(replica.getId() != 900u);
+        const EventObject remote = EventObjects::of(replica);
+        CHECK(remote.ownerId == 7u && remote.netId == 900u);
+        CHECK(!EventObjects::isOffline(remote));
+        CHECK(EventObjects::resolve(w.objects, remote) == &replica);
+        // Resolution uses both ids: the local id is not a network id, and the owner must match.
+        CHECK(EventObjects::resolve(w.objects, {7u, replica.getId()}) == nullptr);
+        CHECK(EventObjects::resolve(w.objects, {8u, 900u}) == nullptr);
+        CHECK(EventObjects::resolve(w.objects, {EventObjects::OfflineOwner, 900u}) == nullptr);
+        // An offline reference by local id still finds it.
+        CHECK(EventObjects::resolve(w.objects, {EventObjects::OfflineOwner, replica.getId()}) == &replica);
+
+        // Server-owned object: owner 0 is a NETWORK owner. Its netId equals the player's local id,
+        // and the reference must resolve to the server object, not to the player.
+        GameObject &server = w.objects.create("server-owned");
+        server.add<NetworkIdentity>(0u, NetKind::Unknown, w.playerId);
+        const EventObject serverRef = EventObjects::of(server);
+        CHECK(serverRef.ownerId == 0u && serverRef.netId == w.playerId);
+        CHECK(!EventObjects::isOffline(serverRef));
+        CHECK(EventObjects::resolve(w.objects, serverRef) == &server);
+        CHECK(EventObjects::resolve(w.objects, offline) == &w.player());
+
+        // A networked object that has no netId yet is still an offline reference.
+        GameObject &pending = w.objects.create("not-yet-replicated");
+        pending.add<NetworkIdentity>(7u, NetKind::Unknown);
+        CHECK(EventObjects::isOffline(EventObjects::of(pending)));
+
+        // End to end: a Death aimed at the replica by its network reference reaches the handler.
+        int deaths = 0;
+        w.gameplay->setRules(holdPlayerRules(deaths));
+        w.gameplay->raiseDeath(replica, nullptr, "remote");
+        w.events.dispatch();
+        CHECK(deaths == 1);
+    }
+
+    struct Snapshot
+    {
+        float x = 0.0f;
+        float y = 0.0f;
+        int deaths = 0;
+        GameplayEvents::TransientState transient;
+    };
+
+    // Full ReplayController flow: recording starts while the player is still inside a death zone
+    // that already triggered. Playback must not produce a second Collision/Death for that zone.
+    void testRecordingInsideTriggeredZone()
+    {
+        World w;
+        int deaths = 0;
+        w.gameplay->setRules(holdPlayerRules(deaths)); // the player stays in the zone it died in
+
+        ReplayController replay(w.events);
+        replay.setStateCallbacks(
+            [&]() -> std::any
+            {
+                const Transform *t = w.player().get<Transform>();
+                return Snapshot{t->x, t->y, deaths, w.gameplay->captureTransientState()};
+            },
+            [&](const std::any &state)
+            {
+                const auto &s = std::any_cast<const Snapshot &>(state);
+                w.moveTo(s.x, s.y);
+                deaths = s.deaths;
+                w.gameplay->restoreTransientState(s.transient);
+            });
+
+        auto frame = [&]()
+        {
+            FrameTiming timing;
+            timing.realDelta = 1.0f / 60.0f;
+            timing.timelines.push_back({1.0f / 60.0f, 1.0, false});
+            replay.beginFrame(timing);
+            replay.dispatch(ReplayPhase::Input);
+            w.gameplay->produceCollisions(w.playerId);
+            replay.dispatch(ReplayPhase::Update);
+            replay.dispatch(ReplayPhase::Workers);
+            replay.endFrame();
+        };
+
+        frame(); // the player is in the zone: Collision -> Death, zone disarmed, player stays
+        CHECK(deaths == 1);
+        CHECK(!w.zone().armed);
+
+        replay.startRecording(); // applied at the start of the next frame, capturing the state
+        frame();
+        frame();
+        frame();
+        CHECK(replay.isRecording());
+        CHECK(deaths == 1); // still inside the same zone: nothing new while recording
+
+        // By the end of the recording the world is somewhere else: player moved, zone re-armed.
+        w.moveTo(500.0f, 500.0f);
+        w.gameplay->resetTransientState();
+        const int deathEventsBefore = w.count(EventTypes::Death);
+
+        replay.stop();
+        replay.startPlayback(); // Stop then Play are applied at the start of the next frame
+        frame();
+        CHECK(replay.isPlaying());
+        CHECK(w.player().get<Transform>()->x == 0.0f); // restored inside the zone
+        frame();
+        frame();
+        CHECK(!replay.isPlaying()); // all 3 recorded frames played
+
+        CHECK(deaths == 1);
+        CHECK(w.count(EventTypes::Death) == deathEventsBefore); // no extra death during playback
+        CHECK(!w.zone().armed);
+    }
 }
 
 int main()
@@ -260,6 +460,10 @@ int main()
     testListenersRemovedOnDestroy();
     testDestroyedTargetIsIgnored();
     testReplaySafety();
+    testEventObjectReferences();
+    testTransientStateRoundTrip();
+    testBoundsLatchRoundTrip();
+    testRecordingInsideTriggeredZone();
     std::puts("EventChainTest: all passed");
     return 0;
 }

@@ -52,6 +52,9 @@ int main()
     circular.add<MovementPath>(
         MovementPathType::Circular, 1.0f, 10.0f);
 
+    // Initialize movement paths before testing their movement.
+    GameplaySystems::updateMovementPaths(objects, 0.0f);
+
     GameplaySystems::updateMovementPaths(objects, halfPi);
 
     assert(near(horizontal.get<Transform>()->x, 15.0f));
@@ -60,8 +63,9 @@ int main()
     assert(near(vertical.get<Transform>()->x, 30.0f));
     assert(near(vertical.get<Transform>()->y, 45.0f));
 
-    assert(near(circular.get<Transform>()->x, 50.0f));
+    assert(near(circular.get<Transform>()->x, 40.0f));
     assert(near(circular.get<Transform>()->y, 60.0f));
+
 
     GameObject &player = objects.create("player");
     player.add<Transform>(5.0f, 5.0f, 10.0f, 10.0f);

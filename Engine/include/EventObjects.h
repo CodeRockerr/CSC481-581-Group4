@@ -3,19 +3,24 @@
 #include "GameObject.h"
 #include "GameObjectManager.h"
 #include "NetworkIdentity.h"
+#include <cstdint>
 
 namespace EventObjects
 {
-    // Networked objects (netId assigned) -> {ownerId, netId}.
-    // Offline / not-yet-replicated objects  -> {0, localObjectId}.
+    // Reserved owner id marking an offline (local-id) reference. Never a real client/server id.
+    inline constexpr std::uint32_t OfflineOwner = 0xFFFFFFFFu;
+
     inline EventObject of(const GameObject &object)
     {
         if (const NetworkIdentity *id = object.get<NetworkIdentity>())
             if (id->netId != 0)
                 return {id->ownerId, id->netId};
-        return {0, object.getId()};
+        return {OfflineOwner, object.getId()};
     }
 
+    inline bool isOffline(const EventObject &o) { return o.ownerId == OfflineOwner; }
+
+    // The default-constructed EventObject: "no object".
     inline bool isNone(const EventObject &o) { return o.ownerId == 0 && o.netId == 0; }
 
     // Reverse lookup. Returns nullptr when the object no longer exists.
@@ -23,8 +28,8 @@ namespace EventObjects
     {
         if (isNone(ref))
             return nullptr;
-        if (ref.ownerId == 0)
-            return objects.find(ref.netId);
+        if (isOffline(ref))
+            return objects.find(ref.netId); // local GameObject id
         GameObject *found = nullptr;
         objects.forEach<NetworkIdentity>([&](GameObject &object, NetworkIdentity &id)
                                          {

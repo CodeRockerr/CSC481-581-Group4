@@ -145,9 +145,9 @@ if(BUILD_TESTING)
     add_executable(engine_events_test Tests/EngineEventsTest.cpp)
     target_link_libraries(engine_events_test PRIVATE engine)
     add_test(NAME engine_events_test COMMAND engine_events_test)
-    add_executable(EventChainTest Tests/EventChainTest.cpp)
-    target_link_libraries(EventChainTest PRIVATE engine)
-    add_test(NAME EventChainTest COMMAND EventChainTest)
+    add_executable(event_chain_test Tests/EventChainTest.cpp)
+    target_link_libraries(event_chain_test PRIVATE engine)
+    add_test(NAME event_chain_test COMMAND event_chain_test)
     set_tests_properties(engine_events_test PROPERTIES
         ENVIRONMENT "SDL_VIDEODRIVER=dummy;SDL_RENDER_DRIVER=software"
         TIMEOUT 15

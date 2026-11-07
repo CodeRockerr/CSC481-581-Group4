@@ -1,4 +1,13 @@
 #pragma once
+// Gameplay event producers + common handlers (Milestone 4, Yeva's part).
+//
+//   InputSystem::poll      -> Input event     -> PlayerIntent
+//   produceCollisions      -> Collision event -> (death zone / scroll trigger / game rule)
+//   death zone, hazards,
+//   produceOutOfBounds     -> Death event     -> Rules::onDeath (game rules) -> Spawn event
+//   Spawn event            -> position + velocity reset -> Rules::onSpawned
+//
+// Producers only call EventManager::raise(). Handlers run on the main thread inside dispatch().
 #include "Camera.h"
 #include "Event.h"
 #include "EventManager.h"
@@ -9,6 +18,7 @@
 #include <optional>
 #include <string>
 #include <unordered_set>
+#include <utility>
 #include <vector>
 
 class GameplayEvents
@@ -29,6 +39,17 @@ public:
 
         // Runs for every Collision event after the built-in death zone / scroll trigger handling.
         std::function<void(GameObject &player, GameObject &other, const Event &collision)> onCollision;
+    };
+
+    // The producers' edge-detection memory. Replay capture/restore must save and put back
+    // exactly this, otherwise a replay can fire (or miss) an event the recording did not.
+    // Object ids are local GameObject ids, so this is valid for offline replay where the
+    // objects keep their ids between capture and restore.
+    struct TransientState
+    {
+        std::unordered_set<std::uint32_t> touching;                   // objects the player was overlapping
+        bool boundsLatched = false;                                   // out-of-bounds death already raised
+        std::vector<std::pair<std::uint32_t, bool>> deathZoneArmed;   // (zone object id, DeathZone::armed)
     };
 
     GameplayEvents(EventManager &events, GameObjectManager &objects, Camera &camera);
@@ -60,8 +81,17 @@ public:
     // Spawn point a Death should use by default (zone's name, else "default").
     std::string defaultSpawnFor(const Event &death) const;
 
-    // Replay: call from the game's restore hook (together with resetting PlayerIntent and the
-    // game's own state). Clears the touching set, the out-of-bounds latch, and re-arms all DeathZones.
+    // ---- Replay state ----
+    // Use these in the game's ReplayController capture/restore callbacks. Capture records
+    // `touching`, `boundsLatched` and every DeathZone's `armed` flag (inactive zones included).
+    // Restore puts them back exactly; zones that did not exist at capture time start armed.
+    // This is what keeps a replay that begins while the player is inside an already-triggered
+    // death zone from raising a second Collision/Death for that zone.
+    TransientState captureTransientState() const;
+    void restoreTransientState(const TransientState &state);
+
+    // Fresh start (new level / new game): forget everything and re-arm every DeathZone.
+    // NOT for replay restore: with the player inside a triggered zone it causes an extra death.
     void resetTransientState();
 
 private:

@@ -1,4 +1,4 @@
-#include "GameplayEvents.h"
+#include "GamePlayEvents.h"
 
 #include "Collision.h"
 #include "Components.h"
@@ -13,6 +13,10 @@
 #include <cstring>
 #include <mutex>
 #include <utility>
+
+#include <cstdint>
+#include <unordered_map>
+#include <unordered_set>
 
 namespace
 {
@@ -161,12 +165,43 @@ std::string GameplayEvents::defaultSpawnFor(const Event &death) const
     return "default";
 }
 
+// ---------------------------------------------------------------- replay state
+
+GameplayEvents::TransientState GameplayEvents::captureTransientState() const
+{
+    TransientState state;
+    state.touching = touching;
+    state.boundsLatched = boundsLatched;
+    // getAll() rather than forEach(): inactive zones keep their armed flag too.
+    for (const auto &object : objects.getAll())
+        if (const DeathZone *zone = object->get<DeathZone>())
+            state.deathZoneArmed.emplace_back(object->getId(), zone->armed);
+    return state;
+}
+
+void GameplayEvents::restoreTransientState(const TransientState &state)
+{
+    touching = state.touching;
+    boundsLatched = state.boundsLatched;
+
+    // Zones missing from the snapshot (created after capture) start armed.
+    for (const auto &object : objects.getAll())
+        if (DeathZone *zone = object->get<DeathZone>())
+            zone->armed = true;
+
+    for (const auto &entry : state.deathZoneArmed)
+        if (GameObject *object = objects.find(entry.first))
+            if (DeathZone *zone = object->get<DeathZone>())
+                zone->armed = entry.second;
+}
+
 void GameplayEvents::resetTransientState()
 {
     touching.clear();
     boundsLatched = false;
-    objects.forEach<DeathZone>([](GameObject &, DeathZone &zone)
-                               { zone.armed = true; });
+    for (const auto &object : objects.getAll())
+        if (DeathZone *zone = object->get<DeathZone>())
+            zone->armed = true;
 }
 
 // ---------------------------------------------------------------- handlers
