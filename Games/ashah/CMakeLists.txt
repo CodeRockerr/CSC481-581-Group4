@@ -16,6 +16,15 @@ if(BUILD_TESTING)
     add_test(NAME ashah_route_test COMMAND ashah_game --verify-run)
     add_test(NAME ashah_pause_test COMMAND ashah_game --verify-pause)
     add_test(NAME ashah_foundations_test COMMAND ashah_game --verify-foundations)
+    add_executable(ashah_m4_test Milestone4Test.cpp ${CMAKE_SOURCE_DIR}/Engine/src/Server.cpp)
+    target_link_libraries(ashah_m4_test PRIVATE engine)
+    add_test(NAME ashah_m4_test COMMAND ashah_m4_test)
+    add_test(NAME ashah_sonar_binary_test COMMAND ashah_m4_test --network binary)
+    add_test(NAME ashah_sonar_text_test COMMAND ashah_m4_test --network text)
+    set_tests_properties(ashah_m4_test ashah_sonar_binary_test ashah_sonar_text_test PROPERTIES
+        ENVIRONMENT "SDL_VIDEODRIVER=dummy;SDL_RENDER_DRIVER=software"
+        TIMEOUT 20
+    )
     set_tests_properties(ashah_route_test ashah_pause_test ashah_foundations_test PROPERTIES
         ENVIRONMENT "SDL_VIDEODRIVER=dummy;SDL_RENDER_DRIVER=software"
         TIMEOUT 90

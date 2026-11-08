@@ -41,6 +41,18 @@ namespace SeaVisuals
     {
         text(r, (Sea::ViewWidth - s.size() * 8 * scale) * 0.5f, y, scale, c, s);
     }
+    inline void eventHistory(SDL_Renderer *r, const std::vector<std::string> &entries)
+    {
+        rect(r, 24, 190, 400, 202, {3, 20, 36, 240});
+        rect(r, 24, 190, 400, 3, {110, 231, 226, 255});
+        text(r, 40, 206, 1.5f, {148, 240, 232, 255}, "EVENT HISTORY  [H TO HIDE]");
+        if (entries.empty())
+            text(r, 40, 242, 1.25f, {178, 211, 217, 255}, "Collect a pearl to start the log.");
+        int row = 0;
+        for (auto entry = entries.rbegin(); entry != entries.rend(); ++entry, ++row)
+            text(r, 40, 242 + row * 24.f, 1.25f,
+                 row == 0 ? SDL_Color{255, 226, 162, 255} : SDL_Color{178, 211, 217, 255}, *entry);
+    }
     inline SDL_Texture *target(SDL_Renderer *r, int w, int h)
     {
         SDL_Texture *t = SDL_CreateTexture(r, SDL_PIXELFORMAT_RGBA8888, SDL_TEXTUREACCESS_TARGET, w, h);
@@ -123,13 +135,10 @@ namespace SeaVisuals
     inline SDL_Texture *blendRegion(SDL_Renderer *r, SDL_Texture *art, int height, bool fadeTop)
     {
         auto *t = target(r, 1280, height);
-        // Drawing into transparent targets stores premultiplied color. Preserve
-        // that color when compositing the fade over the previous background.
         SDL_SetTextureBlendMode(t, SDL_BLENDMODE_BLEND_PREMULTIPLIED);
         float w, h;
         SDL_GetTextureSize(art, &w, &h);
-        // Skip the bright surface painted into the top of each supplied region.
-        // A 160px overlap fades into the preceding region on both trips.
+
         for (int y = 0; y < height; y += 4)
         {
             const float strip = static_cast<float>(std::min(4, height - y));
@@ -288,7 +297,7 @@ namespace SeaVisuals
         rect(r, 20, 625, 1240, 79, {3, 20, 36, 232});
         text(r, 40, 641, 1.5f, {255, 226, 162, 255}, message);
         text(r, 40, 674, 1.5f, {161, 206, 217, 255}, "A/D STEER   SPACE SWIM / JUMP   S DIVE / DROP   P PAUSE   F SCALE   1/2/3 TIME   R RESTART   ESC EXIT");
-        // A small depth rail shows where the remaining pearls are.
+
         rect(r, 1254, 160, 3, 430, {61, 120, 149, 200});
         for (int i = 0; i < Sea::PearlCount; ++i)
             circle(r, 1255, 160 + Sea::Pearls[i].y / Sea::WorldHeight * 430, 4,
