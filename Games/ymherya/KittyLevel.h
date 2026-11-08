@@ -17,6 +17,7 @@ namespace Kitty
     // Payload is EventFields: FriendFell {owner}, Rescue {owner = who is rescued, x, y = rescuer position}.
     constexpr EventType EventFriendFell = EventTypes::FirstGame + 1;
     constexpr EventType EventRescue = EventTypes::FirstGame + 2;
+    constexpr EventType EventRescueAccepted = EventTypes::FirstGame + 3; // sent by the fallen player: who won
 
     constexpr float ViewWidth = 1280.0f;
     constexpr float ViewHeight = 800.0f;
@@ -95,7 +96,7 @@ namespace Kitty
     constexpr float KittyHeight = ViewHeight * 0.18f;
     constexpr float KittyWidth = KittyHeight * 0.60f;
     constexpr float KittyGroundOffset = 50.0f;
-    constexpr float KittyFeetLift = 45.0f; // raise Kitty standing on the ground (pixels); adjust to taste
+    constexpr float KittyFeetLift = 40.0f; // raise Kitty standing on the ground (pixels); adjust to taste
     constexpr float KittyGroundY = GroundY - KittyHeight - KittyGroundOffset;
 
     constexpr SpawnPointDef SpawnPoints[] = {

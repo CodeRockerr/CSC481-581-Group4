@@ -1,3 +1,13 @@
+// Hello Kitty Adventure - Milestone 4 (CSC 481)
+// Gameplay is driven by the shared event system (see Docs/Design/Design_Events.md and GameplayEvents.md):
+//   keys            -> Input events      -> PlayerIntent (movement), plus the R "rescue" action
+//   overlaps        -> Collision events  -> Kuromi hit, pit (DeathZone), scroll triggers
+//   Collision/world -> Death event       -> lose a heart, then the rules name a spawn point
+//   Death           -> Spawn event       -> engine moves Kitty to the checkpoint
+//   Networked: Death raises FriendFell, R raises Rescue; both are shareable and cross the server
+//   through NetEventBridge. The fallen friend's Kitty turns red and a countdown bar shows the rescue window.
+// Replay is optional for 481 and is not used here.
+
 #include "KittyLevel.h"
 
 #include "Components.h"
@@ -12,6 +22,7 @@
 #include "NetworkClient.h"
 #include "NetworkIdentity.h"
 #include "PlayerIntent.h"
+#include "RescueTracker.h"
 #include "PeerClock.h"
 #include "PeerSession.h"
 #include "SpawnPoint.h"
@@ -254,7 +265,7 @@ int main(int argc, char *argv[])
 
     const float moveSpeed = 350.0f;
     const float jumpSpeed = 700.0f;
-    const float spawnOffset = 65.0f * static_cast<float>(localOwner % 4);
+    const float spawnOffset = 40.0f * static_cast<float>(localOwner % 4);
     GameObject &player = objects.create("hello-kitty");
     player.add<Transform>(Kitty::SpawnPoints[0].x + spawnOffset, Kitty::SpawnPoints[0].y, Kitty::KittyWidth, Kitty::KittyHeight);
     Sprite &playerSprite = player.add<Sprite>(kittyTexture, 8);
@@ -332,6 +343,12 @@ int main(int argc, char *argv[])
     bool kuromiFlip = false;
     float kuromiLastRaw = 0.0f;   // previous snapshot x
     int lives = MaxLives;
+    // Rescue bookkeeping (see RescueTracker.h): every fall has an id, and only the first matching rescue counts.
+    constexpr double RescueWindow = 6.0;
+    constexpr double LatencyGrace = 1.0; // the fallen player's window is a little longer than the rescuer's
+    Kitty::FallTracker myFall(localOwner);
+    Kitty::PendingRescues pending;
+    Kitty::RescueAttempts attempts; // rescues this client sent and is waiting to hear about
     int deaths = 0;
     double deathCooldown = 2.0;
     int lastAnnouncedCloud = -1;
@@ -352,7 +369,7 @@ int main(int argc, char *argv[])
     auto snapCameraToPlayer = [&]()
     {
         const float x = objects.find(playerId)->get<Transform>()->x;
-        camera.setPosition(x - Kitty::ScrollLeftEdge - 65.0f, 0.0f);
+        camera.setPosition(x - Kitty::ScrollLeftEdge - 40.0f, 0.0f);
         pinBoundaries();
     };
 
@@ -449,7 +466,8 @@ int main(int argc, char *argv[])
         fell.type = Kitty::EventFriendFell;
         fell.priority = EventPriority::High;
         fell.shareable = (net != nullptr); // shareable events are forwarded to the server
-        fell.payload = EventFields{{"owner", static_cast<int64_t>(localOwner)}};
+        const int64_t fallId = myFall.beginFall(RescueWindow + LatencyGrace);
+        fell.payload = EventFields{{"owner", static_cast<int64_t>(localOwner)}, {"fall", fallId}};
         engine.getEvents().raise(std::move(fell));
         return target;
     };
@@ -480,8 +498,6 @@ int main(int argc, char *argv[])
     if (net)
         bridge = std::make_unique<NetEventBridge>(events, *net);
 
-    constexpr double RescueWindow = 6.0;
-    std::map<uint32_t, double> fallenFriends; // friend client id -> seconds left to rescue her
 
     // On-screen feedback (the engine has no text rendering, so the HUD uses shapes and colors):
     //  - a bar at the top centre shrinks while a fallen friend can still be rescued (press R before it empties)
@@ -518,7 +534,7 @@ int main(int argc, char *argv[])
         const uint32_t who = static_cast<uint32_t>(fieldNumber(e, "owner", 0.0));
         if (who == 0 || who == localOwner)
             return;
-        fallenFriends[who] = RescueWindow;
+        pending.add(who, static_cast<int64_t>(fieldNumber(e, "fall", 0.0)), RescueWindow);
         announce("Kitty " + std::to_string(who) + " fell! Press R to rescue her."); });
 
     // Local R press (an Input event) -> send a Rescue event for the first friend who is still waiting.
@@ -527,13 +543,13 @@ int main(int argc, char *argv[])
         const auto *input = std::get_if<InputEvent>(&e.payload);
         if (input == nullptr || input->action != "rescue" || e.origin == EventOrigin::Network)
             return;
-        if (fallenFriends.empty())
+        const std::optional<Kitty::PendingRescues::Entry> target = pending.takeFirst();
+        if (!target)
         {
             announce("Nobody needs rescuing right now.");
             return;
         }
-        const uint32_t who = fallenFriends.begin()->first;
-        fallenFriends.erase(fallenFriends.begin());
+        const uint32_t who = target->owner;
         const Transform *me = objects.find(playerId)->get<Transform>();
 
         Event rescue;
@@ -541,17 +557,34 @@ int main(int argc, char *argv[])
         rescue.priority = EventPriority::High;
         rescue.shareable = (net != nullptr);
         rescue.payload = EventFields{{"owner", static_cast<int64_t>(who)},
+                                     {"fall", target->fallId},
+                                     {"by", static_cast<int64_t>(localOwner)},
                                      {"x", static_cast<double>(me->x)},
                                      {"y", static_cast<double>(me->y)}};
         events.raise(std::move(rescue));
-        announce("You rescued Kitty " + std::to_string(who) + "!"); });
+        attempts.sent(target->fallId);
+        // Sending is not winning: the fallen player accepts only the first rescue and announces the winner.
+        announce("Rescue sent to Kitty " + std::to_string(who) + "..."); });
 
     // We were rescued (arrived over the network): spawn at the rescuer's position.
     events.subscribe(Kitty::EventRescue, [&](const Event &e)
                      {
-        if (e.origin != EventOrigin::Network ||
-            static_cast<uint32_t>(fieldNumber(e, "owner", 0.0)) != localOwner)
+        if (e.origin != EventOrigin::Network)
             return;
+        const uint32_t rescuedOwner = static_cast<uint32_t>(fieldNumber(e, "owner", 0.0));
+        const int64_t fallId = static_cast<int64_t>(fieldNumber(e, "fall", 0.0));
+        if (rescuedOwner != localOwner)
+        {
+            // Not ours. Pending lists are cleared by the fallen player's RescueAccepted event, not by
+            // seeing a rescue attempt, because an attempt can still be rejected (expired or too late).
+            return;
+        }
+        // Accept only the first rescue that matches our open fall and arrives before it expires.
+        if (!myFall.tryAccept(fallId))
+        {
+            SDL_Log("Ignored a rescue for fall %lld (already rescued, expired or not ours).", static_cast<long long>(fallId));
+            return;
+        }
         GameObject *point = GameplaySystems::findSpawnPointByName(objects, "rescue");
         GameObject *me = objects.find(playerId);
         if (point == nullptr || me == nullptr)
@@ -562,6 +595,15 @@ int main(int argc, char *argv[])
         if (lives < MaxLives)
             ++lives;
         deathCooldown = std::max(deathCooldown, 1.0);
+        // Tell everyone which rescue won, so the other rescuers drop this fall and learn they were too late.
+        Event accepted;
+        accepted.type = Kitty::EventRescueAccepted;
+        accepted.priority = EventPriority::High;
+        accepted.shareable = (net != nullptr);
+        accepted.payload = EventFields{{"owner", static_cast<int64_t>(localOwner)},
+                                       {"fall", fallId},
+                                       {"by", static_cast<int64_t>(fieldNumber(e, "by", 0.0))}};
+        events.raise(std::move(accepted));
         gameplay.raiseSpawn(*me, "rescue");
         flashTimer = 0.8;
         flashColor = SDL_Color{255, 240, 90, 255};
@@ -575,6 +617,28 @@ int main(int argc, char *argv[])
     bool stallRecover = false;
     float goodX = 0.0f;
     float goodY = 0.0f;
+
+    // The fallen player says whose rescue was accepted (arrived over the network).
+    events.subscribe(Kitty::EventRescueAccepted, [&](const Event &e)
+                     {
+        if (e.origin != EventOrigin::Network)
+            return;
+        const uint32_t owner = static_cast<uint32_t>(fieldNumber(e, "owner", 0.0));
+        const int64_t fallId = static_cast<int64_t>(fieldNumber(e, "fall", 0.0));
+        const uint32_t winner = static_cast<uint32_t>(fieldNumber(e, "by", 0.0));
+        pending.clear(owner, fallId); // nobody else can rescue this fall any more
+        switch (attempts.resolve(fallId, winner, localOwner))
+        {
+        case Kitty::RescueAttempts::Result::Won:
+            announce("You rescued Kitty " + std::to_string(owner) + "!");
+            break;
+        case Kitty::RescueAttempts::Result::TooLate:
+            announce("Too late - Kitty " + std::to_string(owner) + " was already rescued by Kitty " +
+                     std::to_string(winner) + ".");
+            break;
+        case Kitty::RescueAttempts::Result::NotMine:
+            break;
+        } });
 
     announce(story);
     updateHearts();
@@ -594,11 +658,9 @@ int main(int argc, char *argv[])
             if (bridge)
                 bridge->pump();
 
-            for (auto it = fallenFriends.begin(); it != fallenFriends.end();)
-            {
-                it->second -= static_cast<double>(worldDelta);
-                it = it->second <= 0.0 ? fallenFriends.erase(it) : std::next(it);
-            }
+            // Window drags are not game time, so a stalled frame does not use up rescue windows.
+            pending.tick(stalled ? 0.0 : static_cast<double>(worldDelta));
+            myFall.tick(stalled ? 0.0 : static_cast<double>(worldDelta));
 
             if (Input::isKeyJustPressed(SDL_SCANCODE_R))
             {
@@ -863,11 +925,11 @@ int main(int argc, char *argv[])
             // Rescue HUD: bar for the friend R would rescue, red tint on fallen friends, flash on Kitty.
             if (GameObject *bar = objects.find(rescueBarId))
             {
-                bar->get<Sprite>()->visible = !fallenFriends.empty();
-                if (!fallenFriends.empty())
+                bar->get<Sprite>()->visible = !pending.empty();
+                if (!pending.empty())
                 {
                     Transform *barTransform = bar->get<Transform>();
-                    const float fraction = static_cast<float>(fallenFriends.begin()->second / RescueWindow);
+                    const float fraction = static_cast<float>(pending.firstTimeLeft() / RescueWindow);
                     barTransform->width = RescueBarWidth * std::clamp(fraction, 0.0f, 1.0f);
                     barTransform->x = camera.getX() + (Kitty::ViewWidth - RescueBarWidth) * 0.5f;
                     barTransform->y = camera.getY() + 20.0f;
@@ -876,7 +938,7 @@ int main(int argc, char *argv[])
             objects.forEach<NetworkIdentity, Sprite>([&](GameObject &, NetworkIdentity &id, Sprite &friendSprite)
                                                      {
                 if (id.isReplica && id.kind == Kitty::KindKitty)
-                    friendSprite.color = fallenFriends.count(id.ownerId) != 0 ? SDL_Color{255, 90, 90, 230}
+                    friendSprite.color = pending.has(id.ownerId) ? SDL_Color{255, 90, 90, 230}
                                                                              : SDL_Color{255, 200, 220, 230}; });
             if (flashTimer > 0.0)
                 flashTimer -= static_cast<double>(worldDelta);
