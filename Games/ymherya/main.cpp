@@ -1,13 +1,3 @@
-// Hello Kitty Adventure - Milestone 4 (CSC 481)
-// Gameplay is driven by the shared event system (see Docs/Design/Design_Events.md and GameplayEvents.md):
-//   keys            -> Input events      -> PlayerIntent (movement), plus the R "rescue" action
-//   overlaps        -> Collision events  -> Kuromi hit, pit (DeathZone), scroll triggers
-//   Collision/world -> Death event       -> lose a heart, then the rules name a spawn point
-//   Death           -> Spawn event       -> engine moves Kitty to the checkpoint
-//   Networked: Death raises FriendFell, R raises Rescue; both are shareable and cross the server
-//   through NetEventBridge. The fallen friend's Kitty turns red and a countdown bar shows the rescue window.
-// Replay is optional for 481 and is not used here.
-
 #include "KittyLevel.h"
 
 #include "Components.h"
