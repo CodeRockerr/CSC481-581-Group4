@@ -1,13 +1,27 @@
+// Hello Kitty Adventure - Milestone 4 (CSC 481)
+// Gameplay is driven by the shared event system (see Docs/Design/Design_Events.md and GameplayEvents.md):
+//   keys            -> Input events      -> PlayerIntent (movement), plus the R "rescue" action
+//   overlaps        -> Collision events  -> Kuromi hit, pit (DeathZone), scroll triggers
+//   Collision/world -> Death event       -> lose a heart, then the rules name a spawn point
+//   Death           -> Spawn event       -> engine moves Kitty to the checkpoint
+//   Networked: Death raises FriendFell, R raises Rescue; both are shareable and cross the server
+//   through NetEventBridge. The fallen friend's Kitty turns red and a countdown bar shows the rescue window.
+// Replay is optional for 481 and is not used here.
+
 #include "KittyLevel.h"
 
 #include "Components.h"
 #include "DeathZone.h"
 #include "Engine.h"
+#include "EventObjects.h"
+#include "GamePlayEvents.h"
 #include "GamePlaySystems.h"
 #include "Image.h"
 #include "MovementPath.h"
+#include "NetEventBridge.h"
 #include "NetworkClient.h"
 #include "NetworkIdentity.h"
+#include "PlayerIntent.h"
 #include "PeerClock.h"
 #include "PeerSession.h"
 #include "SpawnPoint.h"
@@ -17,7 +31,10 @@
 #include <cstdint>
 #include <cstdio>
 #include <iostream>
+#include <iterator>
+#include <map>
 #include <memory>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
@@ -160,7 +177,10 @@ int main(int argc, char *argv[])
     for (const Kitty::GroundStripDef &strip : Kitty::GroundStrips)
     {
         GameObject &ground = objects.create("ground");
-        ground.add<Transform>(strip.x, Kitty::GroundY, strip.width, groundHeight);
+        // Raise the walkable top by KittyFeetLift so Kitty's feet sit on the ground line (the strip is
+        // invisible; its bottom edge stays where it was). Kuromi still uses GroundY directly.
+        ground.add<Transform>(strip.x, Kitty::GroundY - Kitty::KittyFeetLift, strip.width,
+                              groundHeight + Kitty::KittyFeetLift);
         ground.add<Collider>(0.0f, 0.0f, 0.0f, 0.0f);
         ground.add<Kitty::Ground>();
     }
@@ -218,6 +238,10 @@ int main(int argc, char *argv[])
         spawn.add<Transform>(def.x, def.y, 24.0f, 24.0f);
         spawn.add<SpawnPoint>(def.name);
     }
+    // Moved to the rescuer's position when a friend pulls Kitty out (see the Rescue handler).
+    GameObject &rescuePoint = objects.create("rescue-point");
+    rescuePoint.add<Transform>(0.0f, 0.0f, 24.0f, 24.0f);
+    rescuePoint.add<SpawnPoint>("rescue");
 
     for (const Kitty::DeathZoneDef &def : Kitty::DeathZones)
     {
@@ -240,7 +264,7 @@ int main(int argc, char *argv[])
 
     const float moveSpeed = 350.0f;
     const float jumpSpeed = 700.0f;
-    const float spawnOffset = 40.0f * static_cast<float>(localOwner % 4);
+    const float spawnOffset = 65.0f * static_cast<float>(localOwner % 4);
     GameObject &player = objects.create("hello-kitty");
     player.add<Transform>(Kitty::SpawnPoints[0].x + spawnOffset, Kitty::SpawnPoints[0].y, Kitty::KittyWidth, Kitty::KittyHeight);
     Sprite &playerSprite = player.add<Sprite>(kittyTexture, 8);
@@ -248,6 +272,7 @@ int main(int argc, char *argv[])
     player.add<Collider>(0.20f, 0.20f, 0.10f, 0.10f);
     player.add<PhysicsBody>(Engine::PlayerTime, true);
     player.add<PlayerInput>(moveSpeed, jumpSpeed);
+    player.add<PlayerIntent>(); // movement comes from Input events (see InputSystem::poll)
     if (net || peers)
     {
         player.add<NetworkIdentity>(localOwner, Kitty::KindKitty);
@@ -305,15 +330,28 @@ int main(int argc, char *argv[])
     float walkTimer = 0.0f;
     float kuromiAnimTimer = 0.0f;
     float kuromiPrevX = Kitty::KuromiCenterX;
+    // Networked Kuromi is a replica: her x only changes when a server snapshot arrives, so she steps and
+    // looks laggy. These smooth her on the client (dead reckoning between snapshots, then easing).
+    bool kuromiSmoothInit = false;
+    float kuromiSmoothX = 0.0f;   // x actually drawn
+    float kuromiTargetX = 0.0f;   // where snapshots say she is (extrapolated between snapshots)
+    float kuromiLastWritten = 0.0f;
+    float kuromiVelX = 0.0f;      // estimated px/s from consecutive snapshots
+    float kuromiSinceSnap = 0.0f;
+    int kuromiFrame = 0;          // Kuromi's own walk frame and facing (see the animation block)
+    bool kuromiFlip = false;
+    float kuromiLastRaw = 0.0f;   // previous snapshot x
     int lives = MaxLives;
     int deaths = 0;
     double deathCooldown = 2.0;
     int lastAnnouncedCloud = -1;
+    double flashTimer = 0.0;                       // Kitty flashes red when hurt, yellow when rescued
+    SDL_Color flashColor{255, 255, 255, 255};
     std::unordered_map<uint32_t, SDL_FPoint> lastGroundPos;
 
     int64_t lastTitleUpdate = 0;
     uint64_t framesSinceTitle = 0;
-    std::string story = "Jump across the pink clouds. Kuromi guards the ground.";
+    std::string story = "Jump across the pink clouds. Kuromi guards the ground. Press R to rescue a fallen friend.";
 
     auto pinBoundaries = [&]()
     {
@@ -324,7 +362,7 @@ int main(int argc, char *argv[])
     auto snapCameraToPlayer = [&]()
     {
         const float x = objects.find(playerId)->get<Transform>()->x;
-        camera.setPosition(x - Kitty::ScrollLeftEdge - 40.0f, 0.0f);
+        camera.setPosition(x - Kitty::ScrollLeftEdge - 65.0f, 0.0f);
         pinBoundaries();
     };
 
@@ -360,29 +398,47 @@ int main(int argc, char *argv[])
         updateHearts();
     };
 
-    auto respawnAt = [&](const std::string &name)
+    // ---- Gameplay events: Input -> Collision -> Death -> Spawn ----
+    // Producers (InputSystem::poll in Engine::run, produceCollisions/produceOutOfBounds below) only raise
+    // events. The rules here are the handlers' game-specific half: Kitty decides lives, cooldown and
+    // where to respawn. The engine moves the player to the spawn point and zeroes its velocity.
+    GameplayEvents gameplay(engine.getEvents(), objects, camera);
+
+    GameplayEvents::Rules rules;
+
+    // Collision: touching Kuromi (a trigger collider) is a hit unless Kitty is still in her post-death grace.
+    rules.onCollision = [&](GameObject &who, GameObject &other, const Event &)
     {
-        GameObject *spawn = GameplaySystems::findSpawnPointByName(objects, name);
-        if (spawn == nullptr)
+        if (who.getId() != playerId || !other.has<Kitty::Hazard>() || deathCooldown > 0.0)
             return;
-        GameObject *kitty = objects.find(playerId);
-        Transform *t = kitty->get<Transform>();
-        PhysicsBody *body = kitty->get<PhysicsBody>();
-        t->x = spawn->get<Transform>()->x;
-        t->y = spawn->get<Transform>()->y;
-        body->velocityX = 0.0f;
-        body->velocityY = 0.0f;
-        afterRespawn();
+        gameplay.raiseDeath(who, &other, "kuromi");
     };
 
-    auto loseLife = [&](const std::string &reason, const std::string &spawnName)
+    // Death: lose a life (unless in grace) and say where to respawn. Returning a spawn name raises the Spawn event.
+    rules.onDeath = [&](GameObject &victim, const Event &death) -> std::optional<std::string>
     {
+        if (victim.getId() != playerId)
+            return std::nullopt;
+
+        const auto *payload = std::get_if<DeathEvent>(&death.payload);
+        const std::string reason = payload ? payload->reason : std::string();
+        std::string message;
+        std::string target = Kitty::SpawnPoints[0].name;
+        if (reason == "deathzone")
+        {
+            message = "Hello Kitty fell into a pit!";
+            target = gameplay.defaultSpawnFor(death); // the pit's own checkpoint
+        }
+        else if (reason == "kuromi")
+            message = "Oh no! Kuromi caught Hello Kitty!";
+        else
+            message = "Hello Kitty fell out of the sky!";
+
         if (deathCooldown > 0.0)
-            return;
+            return target; // still respawn (never leave her falling), but no life is lost
+
         ++deaths;
         --lives;
-        std::string message = reason;
-        std::string target = spawnName;
         if (lives <= 0)
         {
             lives = MaxLives;
@@ -394,9 +450,141 @@ int main(int argc, char *argv[])
             message += " Lives left: " + std::to_string(lives) + "/" + std::to_string(MaxLives) + ".";
         }
         deathCooldown = 1.0;
-        respawnAt(target);
+        flashTimer = 0.5;
+        flashColor = SDL_Color{255, 80, 80, 255};
         announce(message);
+
+        // Networked interaction (1/3): tell the other players this Kitty fell so they can rescue her.
+        Event fell;
+        fell.type = Kitty::EventFriendFell;
+        fell.priority = EventPriority::High;
+        fell.shareable = (net != nullptr); // shareable events are forwarded to the server
+        fell.payload = EventFields{{"owner", static_cast<int64_t>(localOwner)}};
+        engine.getEvents().raise(std::move(fell));
+        return target;
     };
+
+    // Spawn: the engine has already set position/velocity; reset Kitty's own movement state and the camera.
+    rules.onSpawned = [&](GameObject &subject, const Event &)
+    {
+        if (subject.getId() == playerId)
+            afterRespawn();
+    };
+
+    gameplay.setRules(rules);
+
+    // ---- Networked interaction: cloud rescue (client <-> server <-> client) ----
+    //  1. A real death raises EventFriendFell (shareable).
+    //  2. NetEventBridge hands shareable local events to NetworkClient::sendEvent; the server orders
+    //     them and delivers them to every OTHER client, which enqueues them (never handles on the network thread).
+    //  3. A friend sees "Kitty N fell", presses R within the window, which raises an Input event; its handler
+    //     raises EventRescue (shareable) carrying the rescuer's position.
+    //  4. The fallen player receives EventRescue and raises a Spawn event at that position (the engine's Spawn
+    //     handler moves her, zeroes velocity, and onSpawned resets her state). She also gets a heart back.
+    // Needs `--client host port`; --p2p has no event transport.
+    EventManager &events = engine.getEvents();
+
+    // NetEventBridge (Sai) sets the event owner id, forwards shareable Local events to
+    // NetworkClient::sendEvent, and on pump() raises events received from the server as Network-origin.
+    std::unique_ptr<NetEventBridge> bridge;
+    if (net)
+        bridge = std::make_unique<NetEventBridge>(events, *net);
+
+    constexpr double RescueWindow = 6.0;
+    std::map<uint32_t, double> fallenFriends; // friend client id -> seconds left to rescue her
+
+    // On-screen feedback (the engine has no text rendering, so the HUD uses shapes and colors):
+    //  - a bar at the top centre shrinks while a fallen friend can still be rescued (press R before it empties)
+    //  - the fallen friend's Kitty turns red while she can be rescued
+    //  - Kitty flashes red when she loses a life and yellow when she is rescued
+    constexpr float RescueBarWidth = 320.0f;
+    GameObject &rescueBar = objects.create("rescue-bar");
+    rescueBar.add<Transform>(0.0f, 0.0f, RescueBarWidth, 16.0f);
+    Sprite &rescueBarSprite = rescueBar.add<Sprite>(SDL_Color{255, 90, 140, 255});
+    rescueBarSprite.layer = 31;
+    rescueBarSprite.visible = false;
+    const uint32_t rescueBarId = rescueBar.getId();
+
+    auto fieldNumber = [](const Event &e, const char *key, double fallback) -> double
+    {
+        const auto *fields = std::get_if<EventFields>(&e.payload);
+        if (fields == nullptr)
+            return fallback;
+        const auto found = fields->find(key);
+        if (found == fields->end())
+            return fallback;
+        if (const auto *whole = std::get_if<int64_t>(&found->second))
+            return static_cast<double>(*whole);
+        if (const auto *real = std::get_if<double>(&found->second))
+            return *real;
+        return fallback;
+    };
+
+    // A friend fell (arrived over the network).
+    events.subscribe(Kitty::EventFriendFell, [&](const Event &e)
+                     {
+        if (e.origin != EventOrigin::Network)
+            return;
+        const uint32_t who = static_cast<uint32_t>(fieldNumber(e, "owner", 0.0));
+        if (who == 0 || who == localOwner)
+            return;
+        fallenFriends[who] = RescueWindow;
+        announce("Kitty " + std::to_string(who) + " fell! Press R to rescue her."); });
+
+    // Local R press (an Input event) -> send a Rescue event for the first friend who is still waiting.
+    events.subscribe(EventTypes::Input, [&](const Event &e)
+                     {
+        const auto *input = std::get_if<InputEvent>(&e.payload);
+        if (input == nullptr || input->action != "rescue" || e.origin == EventOrigin::Network)
+            return;
+        if (fallenFriends.empty())
+        {
+            announce("Nobody needs rescuing right now.");
+            return;
+        }
+        const uint32_t who = fallenFriends.begin()->first;
+        fallenFriends.erase(fallenFriends.begin());
+        const Transform *me = objects.find(playerId)->get<Transform>();
+
+        Event rescue;
+        rescue.type = Kitty::EventRescue;
+        rescue.priority = EventPriority::High;
+        rescue.shareable = (net != nullptr);
+        rescue.payload = EventFields{{"owner", static_cast<int64_t>(who)},
+                                     {"x", static_cast<double>(me->x)},
+                                     {"y", static_cast<double>(me->y)}};
+        events.raise(std::move(rescue));
+        announce("You rescued Kitty " + std::to_string(who) + "!"); });
+
+    // We were rescued (arrived over the network): spawn at the rescuer's position.
+    events.subscribe(Kitty::EventRescue, [&](const Event &e)
+                     {
+        if (e.origin != EventOrigin::Network ||
+            static_cast<uint32_t>(fieldNumber(e, "owner", 0.0)) != localOwner)
+            return;
+        GameObject *point = GameplaySystems::findSpawnPointByName(objects, "rescue");
+        GameObject *me = objects.find(playerId);
+        if (point == nullptr || me == nullptr)
+            return;
+        Transform *pointTransform = point->get<Transform>();
+        pointTransform->x = static_cast<float>(fieldNumber(e, "x", pointTransform->x));
+        pointTransform->y = static_cast<float>(fieldNumber(e, "y", pointTransform->y));
+        if (lives < MaxLives)
+            ++lives;
+        deathCooldown = std::max(deathCooldown, 1.0);
+        gameplay.raiseSpawn(*me, "rescue");
+        flashTimer = 0.8;
+        flashColor = SDL_Color{255, 240, 90, 255};
+        announce("A friend rescued you! Heart restored."); });
+
+    // Dragging/resizing the window freezes the main loop on Windows, so the next frame has a huge delta.
+    // Physics then integrates gravity over that whole gap and Kitty drops through the floor ("fell out of
+    // the sky"), respawns at the start and meets Kuromi. A stalled frame is detected here and her position is
+    // restored, with no death raised for it.
+    constexpr float StallSeconds = 0.25f;
+    bool stallRecover = false;
+    float goodX = 0.0f;
+    float goodY = 0.0f;
 
     announce(story);
     updateHearts();
@@ -409,13 +597,37 @@ int main(int argc, char *argv[])
         [&](float worldDelta)
         {
             const float playerDelta = static_cast<float>(playerTime.getLastDelta());
+            const bool stalled = worldDelta > StallSeconds;
             camera.setViewport(Kitty::ViewWidth, Kitty::ViewHeight);
 
+            // Events other players sent (ordered by the server) are enqueued here, on the main thread.
+            if (bridge)
+                bridge->pump();
+
+            for (auto it = fallenFriends.begin(); it != fallenFriends.end();)
+            {
+                it->second -= static_cast<double>(worldDelta);
+                it = it->second <= 0.0 ? fallenFriends.erase(it) : std::next(it);
+            }
+
+            if (Input::isKeyJustPressed(SDL_SCANCODE_R))
+            {
+                Event press;
+                press.type = EventTypes::Input;
+                press.target = EventObjects::of(*objects.find(playerId));
+                press.payload = InputEvent{"rescue", 1.0f};
+                events.raise(std::move(press));
+            }
+
+            bool graceEnded = false;
             if (deathCooldown > 0.0)
             {
-                deathCooldown -= static_cast<double>(worldDelta);
-                if (deathCooldown < 0.0)
+                deathCooldown -= stalled ? 0.0 : static_cast<double>(worldDelta); // a window drag is not game time
+                if (deathCooldown <= 0.0)
+                {
                     deathCooldown = 0.0;
+                    graceEnded = true;
+                }
             }
 
             if (net)
@@ -452,6 +664,28 @@ int main(int argc, char *argv[])
             PhysicsBody &body = *kitty.get<PhysicsBody>();
             Sprite &sprite = *kitty.get<Sprite>();
             const PlayerInput &input = *kitty.get<PlayerInput>();
+
+            bool skipProducers = stalled;
+            if (stallRecover)
+            {
+                // The frame after a stall: physics has just run with the huge delta. Undo it.
+                t.x = goodX;
+                t.y = goodY;
+                body.velocityX = 0.0f;
+                body.velocityY = 0.0f;
+                stallRecover = false;
+                skipProducers = true;
+            }
+            else if (stalled)
+            {
+                stallRecover = true; // physics will run after this update with the huge delta
+                SDL_Log("Window stall (%.2f s): keeping Hello Kitty where she was.", static_cast<double>(worldDelta));
+            }
+            else
+            {
+                goodX = t.x;
+                goodY = t.y;
+            }
             {
                 std::lock_guard<std::mutex> lock(kitty.getMutex());
                 const bool paused = playerTime.isPaused();
@@ -553,25 +787,51 @@ int main(int argc, char *argv[])
                 Sprite *ks = kuromi->get<Sprite>();
                 if (kt && ks)
                 {
-                    const float dx = kt->x - kuromiPrevX;
-                    if (dx > 0.01f)
-                        ks->flipHorizontal = false;
-                    else if (dx < -0.01f)
-                        ks->flipHorizontal = true;
-                    if (std::fabs(dx) > 0.01f)
+                    if (net)
                     {
-                        kuromiAnimTimer += worldDelta;
-                        if (kuromiAnimTimer >= 0.10f)
+                        kuromiSinceSnap += worldDelta;
+                        if (!kuromiSmoothInit)
                         {
-                            kuromiAnimTimer = 0.0f;
-                            ks->frame = (ks->frame + 1) % ks->frameCount;
+                            kuromiSmoothInit = true;
+                            kuromiSmoothX = kuromiTargetX = kuromiLastWritten = kuromiLastRaw = kt->x;
                         }
+                        else if (kt->x != kuromiLastWritten && kt->x != kuromiLastRaw)
+                        {
+                            // A new snapshot arrived: estimate her speed from it and re-aim.
+                            if (kuromiSinceSnap > 0.001f)
+                                kuromiVelX = std::clamp((kt->x - kuromiLastRaw) / kuromiSinceSnap, -400.0f, 400.0f) * 0.5f +
+                                             kuromiVelX * 0.5f;
+                            kuromiLastRaw = kt->x;
+                            kuromiTargetX = kt->x;
+                            kuromiSinceSnap = 0.0f;
+                        }
+                        else
+                        {
+                            // no new snapshot (the replica may still hold the old raw value)
+                            kuromiTargetX += kuromiVelX * worldDelta; // keep walking between snapshots
+                        }
+                        kuromiSmoothX += (kuromiTargetX - kuromiSmoothX) * (1.0f - std::exp(-12.0f * worldDelta));
+                        kt->x = kuromiSmoothX;
+                        kuromiLastWritten = kuromiSmoothX;
                     }
-                    else
+
+                    // Animate from Kuromi's OWN frame and facing, then write them to the sprite every
+                    // frame. A networked replica's sprite is overwritten by net->sync each frame, so
+                    // reading ks->frame back (as before) restarted the walk cycle constantly and made
+                    // her feet vibrate instead of stepping.
+                    const float dx = kt->x - kuromiPrevX;
+                    if (dx > 0.5f)
+                        kuromiFlip = false;
+                    else if (dx < -0.5f)
+                        kuromiFlip = true;
+                    kuromiAnimTimer += worldDelta;
+                    if (kuromiAnimTimer >= 0.12f)
                     {
-                        ks->frame = 0;
                         kuromiAnimTimer = 0.0f;
+                        kuromiFrame = (kuromiFrame + 1) % ks->frameCount;
                     }
+                    ks->frame = kuromiFrame;
+                    ks->flipHorizontal = kuromiFlip;
                     kuromiPrevX = kt->x;
                 }
             }
@@ -581,37 +841,21 @@ int main(int argc, char *argv[])
                                                                { kuromiId = object.getId(); });
             }
 
-            std::vector<bool> wasArmed;
-            objects.forEach<DeathZone>([&](GameObject &, DeathZone &dz)
-                                       { wasArmed.push_back(dz.armed); });
-            GameplaySystems::updateDeathZones(objects, playerId);
-            bool pitDeath = false;
-            std::string pitSpawn = Kitty::SpawnPoints[0].name;
-            std::size_t zoneIndex = 0;
-            objects.forEach<DeathZone>([&](GameObject &, DeathZone &dz)
-                                       {
-                if (zoneIndex < wasArmed.size() && wasArmed[zoneIndex] && !dz.armed)
-                {
-                    pitDeath = true;
-                    pitSpawn = dz.spawnPointName;
-                }
-                ++zoneIndex; });
-            if (pitDeath)
+            // Producers: these only raise Collision / Death events. Pits, Kuromi and the world floor are
+            // all handled by the rules above when the events dispatch.
+            if (!skipProducers)
             {
-                loseLife("Hello Kitty fell into a pit!", pitSpawn);
+                gameplay.produceCollisions(playerId);
+                gameplay.produceOutOfBounds(playerId, Kitty::WorldHeight + 200.0f, "fell out of the sky");
             }
-            else if (deathCooldown <= 0.0 && kuromiId != 0)
-            {
-                if (GameObject *kuromi = objects.find(kuromiId);
-                    kuromi && kuromi->active && overlaps(colliderBounds(kitty), colliderBounds(*kuromi)))
-                {
-                    loseLife("Oh no! Kuromi caught Hello Kitty!", Kitty::SpawnPoints[0].name);
-                }
-            }
-            else if (t.y > Kitty::WorldHeight + 200.0f)
-            {
-                loseLife("Hello Kitty fell out of the sky!", Kitty::SpawnPoints[0].name);
-            }
+
+            // Collision events fire on entering, so if Kuromi is still touching Kitty when her grace
+            // period ends, raise the hit now (a game-specific Death producer).
+            if (graceEnded && !skipProducers && kuromiId != 0)
+                if (GameObject *kuromiObject = objects.find(kuromiId);
+                    kuromiObject && kuromiObject->active &&
+                    overlaps(colliderBounds(kitty), colliderBounds(*kuromiObject)))
+                    gameplay.raiseDeath(kitty, kuromiObject, "kuromi");
 
             {
                 const SDL_FRect box = colliderBounds(kitty);
@@ -625,6 +869,28 @@ int main(int argc, char *argv[])
             }
 
             updateHearts();
+
+            // Rescue HUD: bar for the friend R would rescue, red tint on fallen friends, flash on Kitty.
+            if (GameObject *bar = objects.find(rescueBarId))
+            {
+                bar->get<Sprite>()->visible = !fallenFriends.empty();
+                if (!fallenFriends.empty())
+                {
+                    Transform *barTransform = bar->get<Transform>();
+                    const float fraction = static_cast<float>(fallenFriends.begin()->second / RescueWindow);
+                    barTransform->width = RescueBarWidth * std::clamp(fraction, 0.0f, 1.0f);
+                    barTransform->x = camera.getX() + (Kitty::ViewWidth - RescueBarWidth) * 0.5f;
+                    barTransform->y = camera.getY() + 20.0f;
+                }
+            }
+            objects.forEach<NetworkIdentity, Sprite>([&](GameObject &, NetworkIdentity &id, Sprite &friendSprite)
+                                                     {
+                if (id.isReplica && id.kind == Kitty::KindKitty)
+                    friendSprite.color = fallenFriends.count(id.ownerId) != 0 ? SDL_Color{255, 90, 90, 230}
+                                                                             : SDL_Color{255, 200, 220, 230}; });
+            if (flashTimer > 0.0)
+                flashTimer -= static_cast<double>(worldDelta);
+            sprite.color = flashTimer > 0.0 ? flashColor : SDL_Color{255, 255, 255, 255};
 
             if (net)
                 net->publish(objects);
