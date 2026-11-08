@@ -205,11 +205,39 @@ namespace Sea
             }
         }
     }
+    inline bool opaqueAt(const GameObject &object, float x, float y)
+    {
+        const auto *shape = object.get<SpriteSilhouette>();
+        const auto *sprite = object.get<Sprite>();
+        if (!shape || !sprite) return true;
+        if (!sprite->visible) return false;
+        const auto &mask = sprite->frame >= 8 && shape->swimming ? shape->swimming : shape->normal;
+        if (!mask || mask->width <= 0 || mask->height <= 0 || mask->frames <= 0) return false;
+        const auto &transform = *object.get<Transform>();
+        const auto draw = shape->swimming ? diverDrawBounds(transform) : transform.getBounds();
+        if (x < draw.x || x >= draw.x + draw.w || y < draw.y || y >= draw.y + draw.h) return false;
+        int px = static_cast<int>((x - draw.x) * mask->width / draw.w);
+        const int py = static_cast<int>((y - draw.y) * mask->height / draw.h);
+        if (sprite->flipHorizontal) px = mask->width - 1 - px;
+        const int frame = sprite->frame % mask->frames;
+        const auto index = static_cast<std::size_t>((py * mask->frames + frame) * mask->width + px);
+        return index < mask->opaque.size() && mask->opaque[index];
+    }
     inline bool touchesHazard(const GameObject &player, const GameObject &hazard)
     {
+        if (!Collision::checkCollision(player, hazard)) return false;
         const auto p = bounds(player);
         if (!hazard.has<Urchin>())
-            return Collision::checkCollision(player, hazard);
+        {
+            if (!player.has<SpriteSilhouette>() && !hazard.has<SpriteSilhouette>()) return true;
+            const auto h = bounds(hazard);
+            const float right = std::min(p.x + p.w, h.x + h.w);
+            const float bottom = std::min(p.y + p.h, h.y + h.h);
+            for (float y = std::max(p.y, h.y) + .5f; y < bottom; y += 1)
+                for (float x = std::max(p.x, h.x) + .5f; x < right; x += 1)
+                    if (opaqueAt(player, x, y) && opaqueAt(hazard, x, y)) return true;
+            return false;
+        }
         const auto s = hazard.get<Transform>()->getBounds();
         if (!overlaps(p, s))
             return false;

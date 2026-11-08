@@ -1,5 +1,8 @@
 #pragma once
 #include <cstdint>
+#include <memory>
+#include <utility>
+#include <vector>
 #include "Component.h"
 #include "MovementPath.h"
 #include "NetProtocol.h"
@@ -179,6 +182,18 @@ namespace Sea
     };
     struct Hazard : Component
     {
+    };
+    struct SpriteMask
+    {
+        int width = 0, height = 0, frames = 1;
+        std::vector<uint8_t> opaque;
+    };
+    struct SpriteSilhouette : Component
+    {
+        SpriteSilhouette(std::shared_ptr<const SpriteMask> normal,
+                         std::shared_ptr<const SpriteMask> swimming = {})
+            : normal(std::move(normal)), swimming(std::move(swimming)) {}
+        std::shared_ptr<const SpriteMask> normal, swimming;
     };
     struct Urchin : Component
     {
