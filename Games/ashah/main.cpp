@@ -1,6 +1,10 @@
 #include "SeaLevel.h"
 #include "SeaGameplay.h"
 #include "SeaVisuals.h"
+#include "SeaEvents.h"
+#include "SeaReplay.h"
+#include "NetEventBridge.h"
+#include "PlayerIntent.h"
 
 #include "Components.h"
 #include "DeathZone.h"
@@ -155,6 +159,38 @@ namespace
         }
         SDL_SetRenderTarget(renderer, nullptr);
         return sheet;
+    }
+
+    std::shared_ptr<const Sea::SpriteMask> spriteMask(SDL_Renderer *renderer, SDL_Texture *texture, int frames)
+    {
+        float width, height;
+        SDL_GetTextureSize(texture, &width, &height);
+        auto *previous = SDL_GetRenderTarget(renderer);
+        auto *target = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGBA8888, SDL_TEXTUREACCESS_TARGET,
+                                         static_cast<int>(width), static_cast<int>(height));
+        if (!target) throw std::runtime_error(SDL_GetError());
+        SDL_SetRenderTarget(renderer, target);
+        SDL_SetRenderDrawColor(renderer, 0, 0, 0, 0);
+        SDL_RenderClear(renderer);
+        SDL_RenderTexture(renderer, texture, nullptr, nullptr);
+        auto *pixels = SDL_RenderReadPixels(renderer, nullptr);
+        SDL_SetRenderTarget(renderer, previous);
+        SDL_DestroyTexture(target);
+        if (!pixels) throw std::runtime_error(SDL_GetError());
+        auto *rgba = SDL_ConvertSurface(pixels, SDL_PIXELFORMAT_RGBA32);
+        SDL_DestroySurface(pixels);
+        if (!rgba) throw std::runtime_error(SDL_GetError());
+        auto mask = std::make_shared<Sea::SpriteMask>();
+        mask->width = rgba->w / frames;
+        mask->height = rgba->h;
+        mask->frames = frames;
+        mask->opaque.resize(rgba->w * rgba->h);
+        const auto *data = static_cast<const Uint8 *>(rgba->pixels);
+        for (int y = 0; y < rgba->h; ++y)
+            for (int x = 0; x < rgba->w; ++x)
+                mask->opaque[y * rgba->w + x] = data[y * rgba->pitch + x * 4 + 3] >= 64;
+        SDL_DestroySurface(rgba);
+        return mask;
     }
 
     struct Options
@@ -319,6 +355,10 @@ int runGame(int argc, char *argv[])
     auto *swimmingSuits = suits;
     if (auto *swimFrames = optionalArt("diver_swim.png", true, 4))
         swimmingSuits = keep(makeSuitSheet(renderer, swimFrames, yellowSuit, true));
+    const auto walkingMask = spriteMask(renderer, suits, 8);
+    const auto swimmingMask = spriteMask(renderer, swimmingSuits, 8);
+    const auto fishMask = spriteMask(renderer, fishArt, 4);
+    const auto anglerMask = spriteMask(renderer, anglerArt, 4);
     auto *shoreArt = optionalArt("background_shore.png", false);
     const bool paintedShore = shoreArt != nullptr;
     if (!shoreArt)
@@ -379,6 +419,7 @@ int runGame(int argc, char *argv[])
             s->frameCount = 4;
             o.add<Collider>(.15f, .15f, .15f, .15f, true);
             o.add<Sea::Hazard>();
+            o.add<Sea::SpriteSilhouette>(d.kind == Sea::KindFish ? fishMask : anglerMask);
         }
     };
     if (!net)
@@ -437,8 +478,10 @@ int runGame(int argc, char *argv[])
     // worker. -1 keeps Engine's automatic workers from integrating it a second time.
     player.add<PhysicsBody>(-1, true);
     player.add<PlayerInput>(Sea::MoveSpeed, Sea::JumpSpeed);
+    player.add<PlayerIntent>();
+    player.add<Sea::SpriteSilhouette>(walkingMask, swimmingMask);
     if (net || peers)
-        player.add<NetworkIdentity>(owner, Sea::KindDiver);
+        player.add<NetworkIdentity>(owner, Sea::KindDiver, player.getId());
     const auto playerId = player.getId();
     std::unordered_map<uint32_t, uint32_t> diverSkins;
     const NetReplicator::SpawnFn onSpawn = [&](GameObject &o, const ObjectState &state)
@@ -454,6 +497,8 @@ int runGame(int argc, char *argv[])
         else if (state.netId >= 1 && state.netId <= Sea::MoverCount)
             dressMover(o, static_cast<int>(state.netId - 1));
     };
+    auto &sonarVisual = makeSprite("sonar-pulse", 0, 0, 1, 1, glow, 3);
+    sonarVisual.active = false;
     auto &shield = makeSprite("overdrive-aura", 0, 0, 140, 140, glow, 4);
     shield.get<Sprite>()->color = {255, 215, 95, 180};
     std::vector<uint32_t> bubbles;
@@ -478,7 +523,6 @@ int runGame(int argc, char *argv[])
     auto &hud = makeSprite("screen-overlay", 0, 0, 1280, 720, hudTexture, 1000);
     auto &playerTime = engine.getTimeline(Engine::PlayerTime);
     auto &worldTime = engine.getTimeline(Engine::WorldTime);
-    auto &globalTime = engine.getGlobalTimeline();
     playerTime.setScale(options.speed);
     Sea::Progress progress;
     Sea::PlayerMotion motion;
@@ -499,27 +543,28 @@ int runGame(int argc, char *argv[])
         playerTime.setScale(2);
     auto say = [&](const std::string &s, float duration = 4)
     { message = s; messageTime = duration; };
-    auto respawn = [&]()
+    Sea::Events gameEvents(engine, player, progress, motion, pearlIds, say, [&]()
     {
         ++respawnCount;
-        auto &t = *player.get<Transform>();
-        auto &b = *player.get<PhysicsBody>();
-        t.x = Sea::Spawns[progress.checkpoint].x;
-        t.y = Sea::Spawns[progress.checkpoint].y;
-        b.velocityX = b.velocityY = 0;
-        motion = {};
-        progress.graceTime = 1.8f;
-        camera.setPosition(0, t.y - 250);
+        camera.setPosition(0, player.get<Transform>()->y - 250);
         pit.get<DeathZone>()->armed = true;
-    };
+    }, net != nullptr);
+    gameEvents.historyVisible = options.smokeTest;
+    std::unique_ptr<NetEventBridge> eventBridge;
+    if (net) eventBridge = std::make_unique<NetEventBridge>(engine.getEvents(), *net);
+    auto respawn = [&]() { gameEvents.respawn(); };
     auto restart = [&]()
     {
         progress = {};
         Sea::restoreCollectibles(objects);
         playerTime.unpause();
+        worldTime.unpause();
+        gameEvents.freshStart();
         respawn();
         say("Fresh dive. Jump into the sea, recover every pearl, then return to the buoy above.", 7);
     };
+    gameEvents.onStart = [&]() { titleScreen = false; };
+    gameEvents.onRestart = restart;
     auto endDive = [&]()
     {
         player.get<PhysicsBody>()->velocityX = player.get<PhysicsBody>()->velocityY = 0;
@@ -627,6 +672,67 @@ int runGame(int argc, char *argv[])
     const uint64_t initialMessages = net ? net->getMessagesSent() : 0;
     bool smokeReported = false;
 
+    diverSkins[playerId] = makeSprite("diver-appearance", 0, 0, Sea::DiverDrawWidth,
+                                     Sea::DiverDrawHeight, suits, 6, 8).getId();
+    engine.getReplay().setStateCallbacks([&]() -> std::any
+    {
+        Sea::ReplayState state;
+        state.objects = Sea::captureObjects(objects);
+        state.progress = progress;
+        state.motion = motion;
+        state.events = gameEvents.capture();
+        state.sceneSeconds = sceneSeconds;
+        state.messageTime = messageTime;
+        state.cameraX = camera.getX(); state.cameraY = camera.getY();
+        state.titleScreen = titleScreen; state.wasPaused = wasPaused;
+        state.respawnCount = respawnCount;
+        state.message = message;
+        state.previousGround = previousGround;
+        state.previousFish = previousFish;
+        state.scaleMode = objects.getScaleMode();
+        return state;
+    }, [&](const std::any &saved)
+    {
+        const auto &state = std::any_cast<const Sea::ReplayState &>(saved);
+        Sea::restoreObjects(objects, state.objects);
+        progress = state.progress; motion = state.motion;
+        gameEvents.restore(state.events);
+        sceneSeconds = state.sceneSeconds; messageTime = state.messageTime;
+        camera.setPosition(state.cameraX, state.cameraY);
+        titleScreen = state.titleScreen; wasPaused = state.wasPaused;
+        respawnCount = state.respawnCount; message = state.message;
+        previousGround = state.previousGround; previousFish = state.previousFish;
+        objects.setScaleMode(state.scaleMode);
+    });
+    auto eventHud = [&]()
+    {
+        const float seconds = sceneSeconds;
+        SDL_SetRenderTarget(renderer, waveArt);
+        SDL_SetRenderDrawColor(renderer, 0, 0, 0, 0);
+        SDL_RenderClear(renderer);
+        for (int x = 0; x < 1280; x += 8)
+            SeaVisuals::rect(renderer, static_cast<float>(x), 7 + std::sin(x * .035f + seconds * 2) * 3,
+                             9, 3, {160, 230, 235, 205});
+        SDL_SetRenderTarget(renderer, nullptr);
+        SDL_SetRenderTarget(renderer, hudTexture);
+        SeaVisuals::rect(renderer, 20, 588, 1240, 28, {3, 20, 36, 230});
+        SeaVisuals::text(renderer, 32, 597, 1, {148, 240, 232, 255}, gameEvents.status());
+        if (gameEvents.historyVisible && !titleScreen) SeaVisuals::eventHistory(renderer, gameEvents.recentEvents());
+        SDL_SetRenderTarget(renderer, nullptr);
+    };
+    auto replayControl = [&](EventType type)
+    {
+        if (net || peers)
+        {
+            say("Replay is offline. Run without --client or --p2p to record a dive.", 4);
+            return;
+        }
+        if (titleScreen) return;
+        Event event;
+        event.type = type;
+        engine.getEvents().raise(std::move(event));
+    };
+
     auto updateView = [&]()
     {
         const bool proportional = objects.getScaleMode() == ScaleMode::Percentage;
@@ -642,8 +748,11 @@ int runGame(int argc, char *argv[])
     engine.run([&](float)
                {
         ++frames;
+        if (Input::isKeyJustPressed(SDL_SCANCODE_H) ||
+            (options.verifyPause && (frames == 30 || frames == 60 || frames == 110 || frames == 140)))
+            gameEvents.toggleHistory();
         const bool scriptedScale = options.verifyFoundations && (frames == 5 || frames == 15 || frames == 75 || frames == 85);
-        if (Input::isKeyJustPressed(SDL_SCANCODE_F) || scriptedScale)
+        if ((!engine.getReplay().isPlaying() && !engine.getReplay().isRecording() && Input::isKeyJustPressed(SDL_SCANCODE_F)) || scriptedScale)
         {
             objects.toggleScaleMode();
             say(objects.getScaleMode() == ScaleMode::Pixel ? "PIXEL VIEW: objects keep their pixel size when the window resizes." :
@@ -670,9 +779,17 @@ int runGame(int argc, char *argv[])
             pausedVelocity = {body->velocityX, body->velocityY};
         }
         if (options.verifyPause && (frames == 80 || frames == 160)) playerTime.unpause();
-        if (titleScreen && (Input::isKeyJustPressed(SDL_SCANCODE_RETURN) || Input::isKeyJustPressed(SDL_SCANCODE_SPACE)))
-            titleScreen = false;
-        if (Input::isKeyJustPressed(SDL_SCANCODE_R)) restart();
+        if (!engine.getReplay().isPlaying())
+        {
+            if (titleScreen && (Input::isKeyJustPressed(SDL_SCANCODE_RETURN) || Input::isKeyJustPressed(SDL_SCANCODE_SPACE)))
+                gameEvents.input("start");
+            if (Input::isKeyJustPressed(SDL_SCANCODE_R)) gameEvents.input("restart");
+            if (!titleScreen && !playerTime.isPaused() && Input::isKeyJustPressed(SDL_SCANCODE_E))
+                gameEvents.input("sonar");
+        }
+        if (Input::isKeyJustPressed(SDL_SCANCODE_F5)) replayControl(EventTypes::ReplayStart);
+        if (Input::isKeyJustPressed(SDL_SCANCODE_F6)) replayControl(EventTypes::ReplayStop);
+        if (Input::isKeyJustPressed(SDL_SCANCODE_F7)) replayControl(EventTypes::ReplayPlayback);
         if (Input::isKeyJustPressed(SDL_SCANCODE_ESCAPE)) quit();
         if (playerTime.isPaused())
         {
@@ -691,8 +808,10 @@ int runGame(int argc, char *argv[])
                     body->velocityX != pausedVelocity.x || body->velocityY != pausedVelocity.y)
                     throw std::runtime_error("Paused world, timers, or camera changed");
             }
+            eventHud();
             return;
         }
+        if (eventBridge) eventBridge->pump();
         if (wasPaused && (net || peers))
         {
             // The shared scene may have advanced while this client's view was frozen.
@@ -702,14 +821,15 @@ int runGame(int argc, char *argv[])
         wasPaused = false;
         if (progress.finished()) worldTime.pause(); else worldTime.unpause();
         const float realDelta = options.verifyRun ? 1.f / 15 : options.verifyPause ? 1.f / 60
-            : std::min(.05f, static_cast<float>(globalTime.getLastDelta()));
+            : std::min(.05f, engine.getFrameRealDelta());
         if (!progress.finished()) sceneSeconds += realDelta;
         const float dt = playerTime.isPaused() || titleScreen ? 0.f : options.verifyRun ? realDelta
             : realDelta * static_cast<float>(playerTime.getScale());
         progress.tick(dt, playerTime.isPaused() || titleScreen ? 0.f : realDelta);
         messageTime = std::max(0.f, messageTime - dt);
-        if (net && !progress.finished()) net->sync(objects, onSpawn);
-        if (peers && !progress.finished()) peers->sync(objects, onSpawn);
+        gameEvents.tick(titleScreen || progress.finished() ? 0.f : realDelta);
+        if (net && !progress.finished() && !engine.getReplay().isPlaying()) net->sync(objects, onSpawn);
+        if (peers && !progress.finished() && !engine.getReplay().isPlaying()) peers->sync(objects, onSpawn);
         if (!net && !progress.finished())
         {
             const float delta = realDelta;
@@ -754,6 +874,11 @@ int runGame(int argc, char *argv[])
                 { if (!hazard && o.has<Sea::Urchin>() == (testPhase == 2)) hazard = &o; });
                 const auto &ht = *hazard->get<Transform>();
                 t.x = ht.x - 24; t.y = ht.y - Sea::DiverHeight + 28;
+                if (testPhase == 1)
+                {
+                    t.x = ht.x + (ht.width - Sea::DiverWidth) * .5f;
+                    t.y = ht.y + ht.height * .6f - Sea::DiverHeight * .5f;
+                }
                 axis = 0; swim = dive = jump = false;
                 if (testPhase == 1) verifiedFishShield = progress.powered() && Sea::touchesHazard(player, *hazard);
                 else verifiedUrchinShield = progress.powered() && Sea::touchesHazard(player, *hazard);
@@ -852,36 +977,19 @@ int runGame(int argc, char *argv[])
             sprite.frame = Sea::diverFrame(t, motion, progress.elapsed, axis != 0, progress.powered());
             sprite.color.a = progress.graceTime > 0 && static_cast<int>(progress.elapsed * 10) % 2 ? 130 : 255;
         }
+        const float seconds = sceneSeconds;
+        objects.forEach<Transform, Sea::Hazard>([&](GameObject &o, Transform &ft, Sea::Hazard &)
+        {
+            if (o.has<Sea::Urchin>()) return;
+            auto *s = o.get<Sprite>();
+            s->frame = static_cast<int>(seconds * 8) % 4;
+            auto prev = previousFish.find(o.getId());
+            if (prev != previousFish.end() && ft.x != prev->second.x) s->flipHorizontal = ft.x < prev->second.x;
+            previousFish[o.getId()] = {ft.x, ft.y};
+        });
         if (!progress.finished() && dt > 0)
         {
-            for (int i = 0; i < Sea::PearlCount; ++i)
-            {
-                auto *o = objects.find(pearlIds[i]);
-                if (Collision::checkCollision(player, *o))
-                {
-                    progress.pearls[i] = true; o->get<Sea::Pearl>()->collected = true; o->active = false;
-                    say(progress.count() == Sea::PearlCount ? "ALL PEARLS SECURED! Swim UP to the surface and pass through the buoy opening." :
-                        "Pearl secured. Keep diving - hold SPACE to swim back for any you miss.");
-                }
-            }
-            for (auto id : powerIds)
-            {
-                auto *o = objects.find(id);
-                if (Collision::checkCollision(player, *o))
-                {
-                    o->get<Sea::PowerUp>()->collected = true; o->active = false;
-                    progress.activatePower();
-                    say("3 SECOND OVERDRIVE! Use the yellow suit to cross the next hazard safely.", 3);
-                }
-            }
-            bool touchedHazard = false;
-            objects.forEach<Sea::Hazard>([&](GameObject &o, Sea::Hazard &)
-            { if (Sea::touchesHazard(player, o)) touchedHazard = true; });
-            if (touchedHazard && !progress.protectedNow() && progress.hit())
-            {
-                if (progress.gameOver) endDive();
-                else { respawn(); say("Hit! Returned to your checkpoint. Recovered pearls are safe."); }
-            }
+            gameEvents.collisions();
             if (options.verifyRun && frames <= 3 &&
                 (progress.health != Sea::MaxHealth || respawnCount != respawnsBeforeContact))
                 throw std::runtime_error("Verification failed: powered contact caused damage or a respawn");
@@ -893,14 +1001,6 @@ int runGame(int argc, char *argv[])
                     say("Checkpoint secured. Recovered pearls stay safe; lives are not restored.");
                 }
             pit.get<DeathZone>()->spawnPointName = Sea::Spawns[progress.checkpoint].name;
-            const bool wasArmed = pit.get<DeathZone>()->armed;
-            GameplaySystems::updateDeathZones(objects, playerId);
-            if (wasArmed && !pit.get<DeathZone>()->armed)
-            {
-                // Falling out of the level always costs a life, including during overdrive.
-                progress.loseLife();
-                if (progress.gameOver) endDive(); else { respawn(); say("The abyss cost one life. Returned to your checkpoint."); }
-            }
             if (Sea::updateMission(progress, Sea::bounds(player)))
                 say("RECOVERY COMPLETE! Swim back UP through all 3 regions to the buoy above the sea.", 8);
             if (!progress.finished() && progress.returning)
@@ -945,16 +1045,24 @@ int runGame(int argc, char *argv[])
             { objects.destroy(it->second); it = diverSkins.erase(it); }
             else ++it;
         }
-        const float seconds = sceneSeconds;
-        objects.forEach<Transform, Sea::Hazard>([&](GameObject &o, Transform &ft, Sea::Hazard &)
+        sonarVisual.active = gameEvents.sonar.remaining > 0;
+        if (sonarVisual.active)
         {
-            if (o.has<Sea::Urchin>()) return;
-            auto *s = o.get<Sprite>();
-            s->frame = static_cast<int>(seconds * 8) % 4;
-            auto prev = previousFish.find(o.getId());
-            if (prev != previousFish.end() && ft.x != prev->second.x) s->flipHorizontal = ft.x < prev->second.x;
-            previousFish[o.getId()] = {ft.x, ft.y};
-        });
+            const float phase = 1 - gameEvents.sonar.remaining / 1.2f;
+            auto &pulse = *sonarVisual.get<Transform>();
+            pulse.width = pulse.height = 100 + phase * 660;
+            pulse.x = gameEvents.sonar.x - pulse.width * .5f;
+            pulse.y = gameEvents.sonar.y - pulse.height * .5f;
+            sonarVisual.get<Sprite>()->color = {92, 235, 255, static_cast<Uint8>((1 - phase) * 150)};
+        }
+        for (auto id : pearlIds)
+        {
+            auto &pearl = *objects.find(id);
+            const auto &pt = *pearl.get<Transform>();
+            const float dx = pt.x - gameEvents.sonar.x, dy = pt.y - gameEvents.sonar.y;
+            pearl.get<Sprite>()->color = gameEvents.sonar.remaining > 0 && dx * dx + dy * dy < 380 * 380
+                ? SDL_Color{135, 255, 255, 255} : SDL_Color{255, 255, 255, 255};
+        }
         for (int i = 0; i < Sea::PowerCount; ++i)
         {
             auto *pt = objects.find(powerIds[i])->get<Transform>();
@@ -991,21 +1099,16 @@ int runGame(int argc, char *argv[])
         // Vertical camera with a clear view below the captain, clamped at both ends.
         if (!progress.finished()) camera.setPosition(t.x + t.width * .5f - camera.getViewportWidth() * .5f,
                                                     t.y - camera.getViewportHeight() * (420.f / 720));
-        SDL_SetRenderTarget(renderer, waveArt);
-        SDL_SetRenderDrawColor(renderer, 0, 0, 0, 0);
-        SDL_RenderClear(renderer);
-        for (int x = 0; x < 1280; x += 8)
-            SeaVisuals::rect(renderer, static_cast<float>(x), 7 + std::sin(x * .035f + seconds * 2) * 3,
-                             9, 3, {160, 230, 235, 205});
-        SDL_SetRenderTarget(renderer, nullptr);
+
         hud.get<Transform>()->x = camera.getX(); hud.get<Transform>()->y = camera.getY();
         if (messageTime == 0)
             message = progress.returning ? "RETURN TO SURFACE: hold SPACE to swim up, then pass UP through the buoy hole." :
                 "Explore the three regions. Space swims upward; S dives. Golden cores protect you for 3 seconds.";
         SeaVisuals::hud(renderer, hudTexture, progress, t.y, seconds, message, playerTime.isPaused(), pearlArt, bubbleArt,
                         titleArt, titleScreen);
-        if (net) net->publish(objects);
-        if (peers) peers->publish(objects);
+        eventHud();
+        if (net && !engine.getReplay().isPlaying()) net->publish(objects);
+        if (peers && !engine.getReplay().isPlaying()) peers->publish(objects);
         if (options.verifyFoundations && frames == 12) capture(".pixel.bmp");
         if (options.verifyFoundations && frames == 17) capture(".proportional.bmp");
         if (options.verifyPause && (frames == 80 || frames == 160))
