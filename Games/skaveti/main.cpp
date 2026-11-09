@@ -6,6 +6,7 @@
 #include "GamePlaySystems.h"
 #include "Image.h"
 #include "MovementPath.h"
+#include "EventObjects.h"
 #include "NetEventBridge.h"
 #include "NetworkClient.h"
 #include "NetworkIdentity.h"
@@ -239,7 +240,10 @@ int main(int argc, char *argv[])
     player.add<PlayerInput>(moveSpeed, jumpSpeed);
     if (net || peers)
     {
-        player.add<NetworkIdentity>(localOwner, Cave::KindNinja);
+        // A nonzero netId is required before shared events can name this ninja
+        // (EventObjects::of treats netId 0 as an offline object). The object id is what the
+        // snapshots already use as the netId, so nothing changes on the wire.
+        player.add<NetworkIdentity>(localOwner, Cave::KindNinja, player.getId());
     }
     const uint32_t playerId = player.getId();
 
@@ -346,14 +350,17 @@ int main(int argc, char *argv[])
     std::unordered_set<uint32_t> touching; // hazards/triggers overlapped last frame (edge detection)
     std::unordered_map<uint32_t, int64_t> flashUntil; // replica object id -> global time (ns)
 
-    auto raiseDeath = [&](const std::string &reason, uint32_t causeId)
+    auto raiseDeath = [&](const std::string &reason)
     {
         Event death;
         death.type = EventTypes::Death;
         death.priority = EventPriority::High;
         death.shareable = true; // the only gameplay event shared over the network
-        death.source = {0, causeId};
-        death.target = {0, playerId};
+        // The source stays empty: the cause is a local hazard or the wisp, which other machines
+        // cannot resolve, and an offline reference would keep the whole event local.
+        // The target names the ninja by (client id, netId), which every client can resolve.
+        if (GameObject *ninja = objects.find(playerId))
+            death.target = EventObjects::of(*ninja);
         death.payload = DeathEvent{reason};
         events.raise(death);
     };
@@ -386,9 +393,9 @@ int main(int argc, char *argv[])
         if (events.now() < invulnerableUntil)
             return;
         if (other->has<DeathZone>())
-            raiseDeath("hazard", other->getId());
+            raiseDeath("hazard");
         else if (other->has<Cave::Patrol>())
-            raiseDeath("shadow wisp", other->getId()); });
+            raiseDeath("shadow wisp"); });
 
     events.subscribe(EventTypes::Death, [&](const Event &e)
                      {
@@ -761,7 +768,7 @@ int main(int argc, char *argv[])
                 }
                 touching = std::move(overlapping);
                 if (t.y > Cave::WorldHeight + 200.0f && events.now() >= invulnerableUntil)
-                    raiseDeath("fell", 0);
+                    raiseDeath("fell");
             }
 
             {
