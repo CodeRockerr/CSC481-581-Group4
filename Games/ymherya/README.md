@@ -1,200 +1,219 @@
-# Individual Game
-CSC 481 Game Engine Foundations (Group-4)
-Yeva Mheryan
+# Hello Kitty Adventure - Milestone 4
 
-# Hello Kitty Adventure
+Yeva Mheryan's CSC 481 game (Group 4), built on the team's shared C++/SDL3 engine. This README covers
+Milestone 4: events, a networked interaction, and the individual game built on them.
 
-A 2D side-scrolling platformer built with the team's shared C++/SDL3 engine. Hello Kitty hops across a long trail of pink clouds, jumps over pits, and avoids Kuromi, who guards the start of the level. You have three hearts, and a few hidden spawn points decide where you reappear.
-
-Milestone 3 uses the team’s component `GameObject` model and object networking (`NetworkIdentity`, `publish` / `sync`).
+Hello Kitty hops across a long trail of pink clouds, jumps over pits, and avoids Kuromi, who guards the
+start of the level. You have three hearts. When a friend falls, you can rescue them: one player's action
+changes what happens to another player, and it all travels through the event system.
 
 ## Build and run
 
-Requirements: CMake, Git, and a C++17 compiler. SDL3 is included in the repository. CMake downloads ZeroMQ the first time it configures, so the first build needs an internet connection.
-
-Run everything from the **repository root**, not from `Games/ymherya`. The game loads its images with paths like `Games/ymherya/assets/background.png`, so it will not find them from anywhere else.
+Run everything from the **repository root**, not from `Games/ymherya`. The game loads its images with paths
+like `Games/ymherya/assets/background.png`, so it will not find them from anywhere else.
+CMake, Git, and a C++17 compiler are required. SDL3 is included in the repository; CMake downloads ZeroMQ
+during the first configure, which needs an internet connection.
 
 ```sh
 git clone https://github.com/CodeRockerr/CSC481-581-Group4.git
 cd CSC481-581-Group4
-cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
-cmake --build build --target ymherya_game ymherya_server -j8
-```
-
-On some setups the executables end up in `build/Debug/` (Windows with Visual Studio) or directly in `build/`. Use whichever folder contains `ymherya_game`.
-
-**Offline (single player):**
-cmake -S . -B build
-cmake --build build
-```
-
-Then start the game offline:
-
-```sh
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON
+cmake --build build --config Release --parallel 4
 ./build/Release/ymherya_game
 ```
 
-**Client–server (recommended for multiplayer):**
+Build **everything** as above (not just one target) and wait for it to finish; the first build takes a while.
+
+**Windows only:** if a game or test stops with `libzmq-v145-mt-4_3_5.dll was not found` (or a test exits with code
+`0xc0000135`), the ZeroMQ DLL was built but is not next to the executables. Copy it once and run again:
 
 ```sh
-# Terminal 1
-./build/Release/ymherya_server 5555
-
-# Terminal 2 (and more clients as needed, up to four)
-./build/Release/ymherya_game --client 127.0.0.1 5555
+cp build/_deps/libzmq-build/bin/Release/libzmq-v145-mt-4_3_5.dll build/Release/
 ```
 
-Optional wire format (default is binary):
-
-```sh
-./build/Release/ymherya_game --client 127.0.0.1 5555 binary
-./build/Release/ymherya_game --client 127.0.0.1 5555 text
-```
-
-**Peer-to-peer (optional for CSC 481; no server):**
-
-```sh
-./build/Release/ymherya_game --p2p 6001 127.0.0.1:6002
-./build/Release/ymherya_game --p2p 6002 127.0.0.1:6001
-```
-
-To connect from another computer, replace `127.0.0.1` with the server’s address. The game view is 1280 × 800 in game units and scales with the window when you resize it.
-
-## How to play
-
-1. Hello Kitty starts on the ground near the middle of the first screen. Kuromi patrols the ground near the start.
-2. Jump onto the clouds to stay away from Kuromi. The level is about three screens wide. Nine clouds are fixed and three move: one goes up and down, one goes side to side, and one drifts in a circle. Standing on a moving cloud carries you with it.
-3. Walk toward the right edge of the screen and the camera scrolls with you. Walk back toward the left edge and it scrolls back, so you can return to earlier parts.
-4. In the second half of the level the ground has two gaps (pits). Cross them by jumping from cloud to cloud. If you fall in, you lose a heart and you are sent to a spawn point.
-5. Watch your hearts in the top left corner. You lose one when Kuromi touches you or when you fall into a pit. You get one second of protection after you respawn, and two seconds when the game starts.
-6. When you lose your last heart the hearts refill and you start over at the first spawn point.
-
-The window title and the console print a short story line for each event (landing on a cloud, getting caught, falling into a pit), together with how many hearts you have left.
-On some setups the executables end up in `build/Debug/` (Windows with Visual Studio) or directly in `build/`. Use whichever folder contains `ymherya_game`.
-
-The game view is 1280 x 800 in game units and scales with the window when you resize it. Hello Kitty and Kuromi stay inside the visible area at any window size.
-
-## How to play
-
-1. Hello Kitty starts on the ground near the middle of the first screen. Kuromi starts at the far left and patrols the width of the screen.
-2. Jump onto the clouds to stay away from Kuromi. The level is about three screens wide. Nine clouds are fixed and three move: one goes up and down, one goes side to side, and one drifts in a circle. Standing on a moving cloud carries you with it.
-3. Walk toward the right edge of the screen and the level scrolls with you. Walk back toward the left edge and it scrolls back, so you can return to earlier parts.
-4. In the second half of the level the ground has two gaps (pits). Cross them by jumping from cloud to cloud. If you fall in, you lose a heart and you are sent to a spawn point, and the level scrolls so that spot is on screen.
-5. Watch your hearts in the top left corner. You lose one when Kuromi touches you or when you fall into a pit. You get one second of protection after you respawn, and two seconds when the game starts.
-6. When you lose your last heart the hearts refill and you start over at the first spawn point.
-
-The window title and the console print a short story line for each event (landing on a new cloud, getting caught, falling into a pit), together with how many hearts you have left.
+(For a Debug build the file is `libzmq-v145-mt-gd-4_3_5.dll` in `bin/Debug` and `build/Debug/`.)
 
 ## Controls
 
-| Control | Action |
+| Key | Action |
 | --- | --- |
 | A / D or Left / Right | Walk left and right |
-| Space, W, or Up | Jump (only while standing on the ground or a cloud) |
+| Space / W / Up | Jump (only while standing on the ground or a cloud) |
+| R | Rescue a fallen friend (client-server mode) |
 | P | Pause or resume your own timeline |
-| 1 / 2 / 3 | Half speed, normal speed, double speed for your own player |
+| 1 / 2 / 3 | Half, normal, and double speed for your own player |
 | Tab | Toggle percentage / fixed scale mode |
-| Escape | Quit |
 
-P and 1/2/3 come from the team's timeline code from Milestone 2. They only change your player's timeline, so Kuromi and the clouds keep running.
+P and 1/2/3 come from the team's timeline code. They only change your player's timeline, so Kuromi and the
+clouds keep running.
 
-## Multiplayer
+## How to play
 
-In client mode the **server owns** the moving clouds and Kuromi so every window shows them in the same place. Each client owns its own Hello Kitty and sees the others through object replication. If a client closes, its Hello Kitty disappears from the other windows and everything else keeps running.
+1. Hello Kitty starts on the ground near the first screen. Kuromi patrols the ground near the start.
+2. Jump onto the clouds to stay away from Kuromi. The level is about three screens wide. Nine clouds are
+   fixed and three move: one goes up and down, one goes side to side, and one drifts in a circle. Standing on
+   a moving cloud carries you with it.
+3. Walk toward the right edge of the screen and the camera scrolls with you. Walk back toward the left edge
+   and it scrolls back.
+4. In the second half of the level the ground has two gaps (pits). Cross them from cloud to cloud. Falling
+   in costs a heart and sends you to that pit's checkpoint.
+5. Watch your hearts in the top left corner. You lose one when Kuromi touches you, when you fall into a pit,
+   or when you fall out of the world. After a hit you get one second of protection, and two seconds when the
+   game starts.
+6. When you lose your last heart the hearts refill and you start over at the first spawn point.
+7. In client-server mode, if another player falls you can rescue them (see below).
 
-## Milestone coverage
+The window title and the console print a short story line for each event, with your hearts left.
 
-I am in CSC 481, so this covers the required parts of each milestone. The optional parts (peer-to-peer, binary/text comparison) are available but not required.
+## Client-server rescue demonstration
 
-### Milestone 1–2 (summary)
-
-Hello Kitty uses gravity and keyboard input on `PlayerTime`. Clouds, Kuromi, and remote players run on world time. Client–server multiplayer uses the team network stack. Pause (P) and 1/2/3 only affect the local player timeline.
-Start the server in one terminal:
+Open three terminals in the repository root. Start the server in the first:
 
 ```sh
 ./build/Release/ymherya_server 5555
 ```
 
-Start each client in its own terminal (up to four):
+Then start a client in each of two (or more, up to four) other terminals:
 
 ```sh
 ./build/Release/ymherya_game --client 127.0.0.1 5555
+./build/Release/ymherya_game --client 127.0.0.1 5555
 ```
 
-To connect from another computer, replace `127.0.0.1` with the server's address. Every client draws the other players, and positions are sent in world coordinates so clients that have scrolled to different parts of the level still agree on where everyone is. If a client closes, its Hello Kitty disappears from the other windows and everything else keeps running.
+Make one client's Kitty fall (walk into Kuromi or jump into a pit). In the other window:
 
-In client mode the server controls Kuromi's position, so every window shows her in the same place, and the client maps the server's value onto the width of the first screen. The clouds move from each client's own world timeline, so they are not sent over the network. The peer-to-peer mode from the team engine is not used by this game, which only supports `--client`.
+- the title shows `Kitty N fell! Press R to rescue her.`
+- a pink bar appears at the top of the screen and shrinks over six seconds
+- the fallen Kitty is tinted red
 
-## Milestone coverage
+Press **R** before the bar empties. The fallen player respawns next to the rescuer, flashes yellow, and gets
+one heart back (never above three). Every other client's bar disappears, and a second rescuer sees
+`Nobody needs rescuing right now.`
 
-I am in CSC 481, so this covers the required parts of each milestone. The optional parts (scaling toggle, peer-to-peer, and the performance comparison) are noted where they apply.
+In client mode the **server owns** the moving clouds and Kuromi so every window shows them in the same place.
+Each client owns its own Hello Kitty and sees the others through object replication. If a client closes, its
+Hello Kitty disappears from the other windows and everything else keeps running.
 
-### Milestone 1: Engine foundations
+## Milestone 4 scope
 
-| Task | How the game uses it |
-| --- | --- |
-| Task 1: Core graphics | `main` creates the shared `Engine` and calls `engine.run`. The team engine opens the window and renderer and runs the game loop. |
-| Task 2: Entities | Static objects: the clouds, the background, and the hearts. Controllable object: Hello Kitty. Auto-moving objects: Kuromi and the moving clouds. |
-| Task 3: Physics | Hello Kitty has gravity turned on. The clouds, Kuromi, the hearts, and the background have it turned off. The strength of gravity is the engine's setting. The game only sets the jump speed. |
-| Task 4: Input | The game uses the engine's `Input::isKeyPressed` for walking and `Input::isKeyJustPressed` for jumping. The game code does not read SDL events. |
-| Task 5: Collision | Hello Kitty and Kuromi are checked with the engine's `Collision::checkCollision` (using smaller boxes than the sprites). A hit costs a heart and respawns Hello Kitty. Landing on a cloud stops her fall, and falling into a pit respawns her at a spawn point. |
-| Task 6: Scaling (optional for 481) | The game uses a 1280 x 800 reference size in proportional (percentage) mode, so the scene scales when the window is resized. I did not add a key to switch to pixel mode. |
+I am in CSC 481, so this covers the required parts of Milestone 4: the four events (Input, Collision, Death,
+Spawn) driving gameplay, and a networked interaction that relies on the event system. Replay is optional for
+CSC 481 and is not implemented in this game.
 
-### Milestone 2: Time and networking
+## What changed in Milestone 4
 
-| Section | How the game uses it |
-| --- | --- |
-| Section 1: Timelines | Hello Kitty moves on `PlayerTime`. Kuromi, the clouds, the background, the hearts, and the remote players run on `WorldTime`. Movement uses the elapsed time of each timeline. P pauses and resumes my timeline, and 1/2/3 switch it to 0.5x, 1x, and 2x. Kuromi and the clouds keep moving when I pause or slow down. |
-| Section 2: Client-server | `ymherya_server` runs headless, and every client is its own process with its own window and one Hello Kitty. Each client sends its player state and draws the other players it receives. |
-| Section 3: Multithreaded loop | The game gives the engine a game update and a world update function. The `NetworkClient` runs on its own thread, so the game locks an entity's mutex before it applies network data, and a mutex-protected queue holds new remote players until the main thread can create them. |
-| Section 4: Asynchronicity | Kuromi is controlled by the server, so she is in the same place for every client. Hello Kitty runs on the local player timeline, so slowing down or pausing one client does not change the others. Old messages (by timeline tic) are ignored so a late packet cannot move a player backwards. |
-| Section 5: Peer-to-peer (optional for 481) | Not implemented in this game. |
+- Moved movement, hits, deaths and respawns onto the shared event system.
+- Added the **cloud rescue**: when a player falls, a teammate can press R to bring them back.
+- Added a rescue countdown bar, a red tint on a fallen friend, and red and yellow flashes on Kitty.
+- Added `RescueTracker.h` and a unit test for the rescue rules.
 
-### Milestone 3: Object model and networked scenes
+### How the four events drive the game
 
-| Requirement | Implementation |
-| --- | --- |
-| Player character | Hello Kitty walks and jumps with the keyboard; other clients appear as replicas. |
-| Static platforms | Nine fixed clouds that differ in position and size (big and small textures). |
-| Moving platforms | Three moving clouds with `MovementPath`: vertical, horizontal, and circular. |
-| Spawn points | Hidden `SpawnPoint` objects: `start`, `middle`, `upper`. |
-| Death zones | Hidden `DeathZone` pits (and Kuromi as a hazard); `GameplaySystems::updateDeathZones` teleports to the named spawn. |
-| Side scrolling | Camera + left/right scroll boundary objects. |
-| Object model | All gameplay objects are `GameObject`s with components (`Transform`, `Sprite`, `Collider`, `PhysicsBody`, `PlayerInput`, `MovementPath`, `SpawnPoint`, `DeathZone`, `NetworkIdentity`). |
-| Networking | `NetworkIdentity` + `publish` / `sync`. Server creates movers and Kuromi; clients replicate them. |
-| Player character | Hello Kitty walks and jumps with the keyboard, and other clients' players are drawn as remote copies. |
-| Static platforms | Nine fixed clouds that differ in position and size, using the big and small cloud textures. |
-| Moving platforms | Three moving clouds, each with a `MovementPath` component: vertical, horizontal, and circular. Kuromi also uses a horizontal `MovementPath` when the game runs offline. |
-| Spawn points | Three hidden `SpawnPoint` objects named `start`, `middle`, and `upper`. They have no texture and are never drawn. `start` is the first screen, `middle` is on the ground in the second part of the level, and `upper` is on top of a cloud in the third part. |
-| Death zones | Three hidden `DeathZone` objects. One follows Kuromi and sends you to `start`. The other two are the pits: the first sends you to `middle` and the second sends you to `upper`. The floor does not exist over the pits, so Hello Kitty falls into the zone. The shared `GameplaySystems::updateDeathZones` does the teleport. |
-| Side scrolling | Two hidden boundary objects, one covering the left quarter of the screen and one covering the right 35%. When Hello Kitty overlaps one, the whole scene is translated sideways, so clouds, pits, spawn points, and the background move into and out of view. The level is 4000 units wide. |
-| Object model | Spawn points, death zones, scroll boundaries, and movement paths are `GameObject`s built from components (`Transform`, `Collider`, `SpawnPoint`, `DeathZone`, `MovementPath`, `SideScrollTrigger`). |
+| Event | Producer (only raises the event) | Handler and result |
+| --- | --- | --- |
+| Input | `InputSystem::poll` raises move and jump events every frame. The game raises a `rescue` Input event when R is pressed. | A handler writes `PlayerIntent`, which `PlayerInput` reads for walking and jumping. The rescue handler sends a Rescue event. |
+| Collision | `GameplayEvents::produceCollisions` raises an event the moment Kitty starts overlapping something. | `Rules::onCollision` raises Death when the object is Kuromi. Overlapping a pit's `DeathZone` raises Death inside the shared handler. |
+| Death | Collision, `GameplayEvents::produceOutOfBounds` (fell out of the world), or Kuromi. | `Rules::onDeath` removes a heart unless Kitty is in her protection window, refills the hearts after the last one, picks the spawn point, and raises FriendFell. |
+| Spawn | Raised by the Death handler with the spawn point name, and by the rescue. | The shared handler moves Kitty to the spawn point and zeroes her velocity. `Rules::onSpawned` resets her grounded state, the camera and the hearts. |
 
-The visible parts of the game (Hello Kitty, Kuromi, the clouds, the background, and the hearts) are still the older `Entity` objects from Milestone 1. Hello Kitty has an invisible `GameObject` that follows her, so the shared death zone and scroll systems can see her, and the game translates the visible entities itself when the level scrolls.
+### The networked interaction
+
+| Event | Sent when | Effect on the other clients |
+| --- | --- | --- |
+| `FriendFell` | A real death (not one during protection) | Others add the fall to their pending list for six seconds and show the bar |
+| `Rescue` | A player presses R while a fall is pending | The fallen player decides whether to accept it |
+| `RescueAccepted` | The fallen player accepts the first valid rescue | Others clear that fall. The winner sees "You rescued…"; any other rescuer sees "Nobody needs…". |
+
+All three are shareable. `NetEventBridge` hands them to the client, the server orders them and delivers them
+to every other client, and receivers enqueue them on the main thread. Snapshots still synchronize
+positions. Events say what happened; snapshots say where things are.
+
+Each fall has an id (`owner << 32 | counter`). The fallen player remembers only her open fall and when it
+expires (the six-second window plus one second for network delay), and accepts only the first rescue that
+matches. A rescue for an old fall, an already-rescued fall, or an expired fall is ignored and logged as
+`Ignored a rescue for fall …`. That logic lives in `RescueTracker.h` so it can be tested without the engine.
 
 ## Design decisions
 
-| Decision | Reason |
+| Decision | Choice and reason |
 | --- | --- |
-| Scrolling in both directions | The first version scrolled once. Two boundaries let the level be longer than one screen and let the player go back, and the background is two tiles that wrap around so it never runs out. |
-| Pits as gaps in the floor | The ground is solid except over the two pits, so the death zone is something the player actually falls into instead of an invisible wall. The clouds above the pits give a way across. |
-| Respawn scrolls the level | A spawn point can be far from where Hello Kitty died. Respawning scrolls the level so that the spawn point is on screen, and the hidden objects shift with it. |
-| Smaller collision boxes for Kuromi | The sprite images have transparent space around them. With full-size boxes, standing on a cloud while Kuromi walked underneath counted as a hit. |
-| One function that removes a life | Every hit goes through the same place. This stops one touch from costing two hearts and makes the hearts refill correctly after a game over. |
-| Protection after a respawn | A short timer after each respawn, and at the start, keeps Hello Kitty from being hit again before she can move. |
-| Landing checks where Kitty's feet are | The cloud landing test compares her feet with each cloud's top, including where they were last frame, so she still lands after one long frame such as while resizing the window. |
-| Moving clouds from a `MovementPath` | The same system that moves Kuromi moves the clouds. The game applies each cloud's movement each frame and carries Hello Kitty if she stands on it, so scrolling and the path never fight each other. |
-| Kuromi's range follows the window width | Her position is scaled every frame to the visible width so she never leaves the window when it is resized. She lives in the world, so she scrolls away as you move right. |
+| Producers only raise | `InputSystem` and `GameplayEvents` never change the game directly. The handlers do, so the same events can be recorded, replayed or sent over the network later. |
+| Rules, not copies | The engine handles the common part of Death and Spawn (moving Kitty, zeroing velocity). The game supplies only its own rules (`onCollision`, `onDeath`, `onSpawned`), so another game can reuse the same chain. |
+| Enter-only collisions | A Collision event fires when contact begins. This stops one touch from costing two hearts. If Kuromi is still touching Kitty when her protection ends, the game raises the hit then. |
+| Protection after a hit | A short timer after each hit and at the start keeps Kitty from being hit again before she can move. |
+| Rescue needs a decision from the fallen player | Only the fallen player's game knows whether she is still waiting. Rescuers can say they tried, but only her `RescueAccepted` says who won, so two rescuers can never both succeed. |
+| Only fall and rescue are shared | Death and Spawn stay local. The other players only need to know that someone fell and who rescued whom. |
+| Fall ids | A rescue for an old fall can never revive someone who fell again. |
+| Long frames are not game time | Dragging or resizing the window freezes the loop on Windows. A frame over 0.25 seconds restores Kitty's last position, raises no events, and does not use up the protection timer or the rescue windows. |
+| Feedback with shapes | The engine has no text rendering, so messages go to the window title and console, and the bar and colors show the rescue on screen. |
+| Kuromi smoothing | A replicated Kuromi only moves when a snapshot arrives. Clients estimate her speed and ease toward the snapshot so she walks smoothly, and keep her animation frame locally. |
+| Standing height | The invisible ground is raised by `KittyFeetLift` so Kitty's feet sit on the visible ground. |
 
-## Files
+## Code guide
 
 | File | Purpose |
 | --- | --- |
-| `main.cpp` | Game: scene setup, controls, hearts, death zones, camera scroll, networking |
-| `KittyLevel.h` | Level data: clouds, movers, spawns, pits, net kinds |
-| `server.cpp` | Headless server; owns moving clouds and Kuromi |
-| `ymherya_game.cpp` | The game: scene setup, controls, hearts, death zones, scrolling, and networking |
-| `ymherya_server` | The server for this game, which owns Kuromi's movement |
+| `main.cpp` | Game: scene setup, controls, hearts, event rules, rescue, camera scroll, networking |
+| `KittyLevel.h` | Level data: clouds, movers, spawns, pits, network kinds, and the custom event types |
+| `RescueTracker.h` | Rescue bookkeeping: `FallTracker`, `PendingRescues`, `RescueAttempts` (no engine dependencies) |
+| `RescueTrackerTest.cpp` | Unit test for the rescue rules, including two rescuers |
+| `server.cpp` | Headless server; owns the moving clouds and Kuromi |
 | `assets/` | Hello Kitty, Kuromi, background, cloud, and heart images |
 
-The shared engine, object model, and networking code are in the team's `Engine/` folder.
+## How to test Milestone 4
+
+Build with the commands above and run each check from the repository root. For manual checks, launch
+`./build/Release/ymherya_game`.
+
+### Manual checks
+
+1. **Input:** walk and jump. Press R with nobody to rescue; the title shows `Nobody needs rescuing right now.`
+2. **Collision and Death:** walk into Kuromi. Kitty flashes red, one heart breaks, and the title shows the lives left. Touching Kuromi again during the protection second does nothing.
+3. **Spawn:** fall into a pit. Kitty respawns at that pit's checkpoint with no leftover velocity. Lose all three hearts: they refill and you restart.
+4. **Rescue:** run the server and two clients. Let client A die. On client B the title shows the fall, the pink bar shrinks, and A's Kitty is red. Press R on B before the bar empties: A respawns next to B, flashes yellow and gets a heart.
+5. **Expired window:** let A die and wait seven seconds. Pressing R on B does nothing.
+6. **Two rescuers:** add a third client. Let A die and press R on B and C together. A respawns once. One of them sees `You rescued…` and the other `Nobody needs…`.
+7. Run the automated checks (see the next section).
+
+### Automated tests
+
+Run these from the repository root after building everything (see Build and run). On Windows, if a test exits with
+code `0xc0000135`, copy the ZeroMQ DLL as described in Build and run, then run it again.
+
+All tests (every test program in the project should pass; this branch has 18):
+
+```sh
+ctest --test-dir build -C Release --output-on-failure
+```
+
+Only the tests for my part of Milestone 4:
+
+```sh
+ctest --test-dir build -C Release -R "event_chain_test|ymherya_rescue_test" --output-on-failure
+```
+
+Milestone 4 tests only, including the team's event, replay and network event tests:
+
+```sh
+ctest --test-dir build -C Release -R "event_manager_test|replay_test|engine_events_test|net_events_test|event_chain_test|ymherya_rescue_test" --output-on-failure
+```
+
+Run one test directly (it prints its own result):
+
+```sh
+./build/Release/ymherya_rescue_test
+./build/Release/event_chain_test
+```
+
+`ymherya_rescue_test` prints `rescue_tracker_test: all checks passed`. A successful `ctest` run ends with
+`100% tests passed, 0 tests failed`.
+
+With a Visual Studio Debug build, use `-C Debug` and `./build/Debug/...` instead.
+
+What the tests cover:
+
+| Test | What it checks |
+| --- | --- |
+| `event_chain_test` | Shared Input, Collision, Death and Spawn producers and handlers: movement intent, enter-only collisions, death then spawn, rule overrides, destroyed targets, object references |
+| `ymherya_rescue_test` | Rescue rules: first rescue wins, expired and old falls are ignored, a second rescuer is told it was too late, ids never collide |
+| `event_manager_test`, `engine_events_test`, `replay_test`, `net_events_test` | The team's event manager, engine dispatch, replay and networked events |
