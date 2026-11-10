@@ -93,6 +93,7 @@ latest checkpoint; scroll boundaries move the camera through the world.
 | 1 / 2 / 3 | Half / normal / double player-time scale |
 | Tab | Toggle pixel/proportional scaling |
 | H | Show/hide spawn points, death zones, and scroll boundaries |
+| R / T / Y | Record / stop / replay (offline only) |
 
 See the [Cave Ninja guide](Games/skaveti/README.md) for further details.
 
