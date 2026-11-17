@@ -4,6 +4,8 @@ Game Engine Construction project at NC State. A shared C++17/SDL3 engine support
 three individual games and the graphics, timing, object-model, and networking
 features developed across Milestones 1–4. Milestone 4 adds queued gameplay events,
 networked interactions, and offline recording/playback through the shared engine.
+Milestone 5 adds a tested custom pool allocator; manager integration and the other
+Milestone 5 features are still pending.
 
 | Team member | Individual game | Guide |
 | --- | --- | --- |
@@ -339,6 +341,90 @@ that can affect playback.
 | Cave Ninja (CSC581) | Movement intent, hazard/checkpoint contacts, death, checkpoint respawn | Death notification flashes the remote ninja and updates the count | R / T / Y, offline |
 | Hello Kitty Adventure (CSC481) | Movement intent, Kuromi/pit contacts, heart loss, named respawn | FriendFell, Rescue, and RescueAccepted coordinate a single rescue per fall | Not implemented; optional for CSC481 in the assignment |
 
+### Milestone 5 — Custom memory allocator (Adit)
+
+The shared [PoolAllocator](Engine/include/PoolAllocator.h) and its
+[automated tests](Tests/PoolAllocatorTest.cpp) are implemented. Integration into
+GameObjectManager, input chords/sequences, and the new individual games remain
+separate work. Existing games still use the manager's heap allocation path.
+
+#### Design decisions
+
+| Decision | Reason and tradeoff |
+| --- | --- |
+| Generic `PoolAllocator<T>` with a positive, fixed capacity | Games choose the type and object limit; the pool does not grow automatically. |
+| Reserve aligned storage before constructing objects | Supports different object types without constructing every reserved object at startup. |
+| Track free slots and live objects | Released storage can be reused without moving other live objects. Bookkeeping needs additional memory. |
+| Return `nullptr` when full | Games must handle exhaustion; there is no hidden heap fallback. |
+| Construct on `create()` and destroy on `destroy()` | Reused slots contain freshly constructed objects rather than leftover gameplay state. |
+| Restore a slot if construction throws | Failed construction does not consume capacity or change usage counts. |
+| Disable pool copying and moving | Keeps memory ownership and the pool's lifetime explicit. |
+| Expose capacity, size, available slots, and peak usage | Makes pool behavior observable. `clear()` preserves peak usage since construction. |
+
+`std::allocator<T>` obtains the backing storage; the custom allocator manages the
+slots and object lifetimes. Components, strings, textures, and other allocations
+inside an object can still use the heap. Reserving object storage is not a claim
+that the entire game performs no dynamic allocation or runs faster.
+
+#### Usage and ownership
+
+This example demonstrates the allocator directly; it does not enable pooled
+storage in the current GameObjectManager:
+
+```cpp
+#include "PoolAllocator.h"
+#include "GameObject.h"
+
+int main()
+{
+    PoolAllocator<GameObject> pool(128);
+    GameObject *player = pool.create(1, "Player");
+    if (!player)
+        return 1;
+
+    pool.destroy(player);
+    player = nullptr;
+    return 0;
+}
+```
+
+Use `destroy()` instead of `delete`, and discard pointers after release. An old
+pointer cannot distinguish a released object from a new object at the same address.
+The pool must outlive its users. Its destructor destroys remaining live objects and
+releases storage. `clear()` destroys live objects but keeps the reserved storage.
+Object destructors must not throw; constructors/destructors must not reenter the
+same pool. Allocation and release need external synchronization and must happen
+at safe points outside concurrent worker access.
+
+Sai's manager integration must preserve deferred destruction and release pooled
+objects with a pool-aware deleter. Clear the manager's owning pointers before
+releasing its pool. Existing heap-backed games should retain their behavior.
+The manager's reference-returning creation API must handle pool exhaustion
+explicitly, for example by throwing `std::bad_alloc`.
+
+#### Test the allocator
+
+From the repository root:
+
+```sh
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON
+cmake --build build --config Release --target pool_allocator_test --parallel 4
+ctest --test-dir build -C Release -R "^pool_allocator_test$" --output-on-failure -V
+```
+
+One CTest target runs nine checks: configuration, exhaustion, reuse, invalid
+release, object lifetime, constructor failure, alignment, repeated use, and
+compatibility with GameObject and move-only types. Success prints
+`All 9 pool allocator checks passed`. Runtime checks remain active in Release.
+The test does not link SDL or ZeroMQ and needs no game assets or server.
+
+These checks verify the allocator, not pooled manager integration or the complete
+Milestone 5 submission. The new games must use the allocator after integration.
+For CSC581, the milestone also requires two new non-platformer games and an
+individual reflection with code-reuse measurements and screenshot evidence.
+
+Background reading: [Kalevski's object-pooling example](https://dev.to/kalevski/tutorial-optimizing-memory-consumption-in-html5-games-lkb).
+
 Team design documents:
 
 - [Object model](Docs/Design/Design_ObjectModel.md)
@@ -401,7 +487,8 @@ foundations, events/replay, and both Sonar formats:
 ctest --test-dir build -C Release -R 'ashah_.*_test' --output-on-failure
 ```
 
-The current suite registers 18 tests. `event_manager_test`, `event_chain_test`,
+The current suite registers 19 tests, including `pool_allocator_test`.
+`event_manager_test`, `event_chain_test`,
 `engine_events_test`, `replay_test`, and `net_events_test` cover the shared M4
 implementation. `ymherya_rescue_test` checks first-rescue-wins, old/expired falls,
 and winner feedback; it is a rule test, not an end-to-end multiplayer test.
