@@ -2,20 +2,57 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <new>
 #include <string>
 #include <unordered_map>
 #include <vector>
 #include <SDL3/SDL.h>
 #include "GameObject.h"
+#include "PoolAllocator.h"
 #include "RenderItem.h"
 #include "ScaleMode.h"
 #include "Camera.h"
 
+// Returns a GameObject to wherever it came from: its pool slot, or the heap.
+// Stored inside every owning pointer, so the manager never has to guess.
+struct GameObjectDeleter
+{
+    PoolAllocator<GameObject> *pool = nullptr;
+
+    void operator()(GameObject *object) const noexcept
+    {
+        if (pool)
+            pool->destroy(object);
+        else
+            delete object;
+    }
+};
+
+using GameObjectPtr = std::unique_ptr<GameObject, GameObjectDeleter>;
+
 class GameObjectManager
 {
 public:
+    // ---- Pooled storage (Milestone 5) ----
+    // Opt in: reserve storage for `capacity` GameObjects up front. Every object created
+    // afterwards lives in that block instead of the heap. Call it while the manager is
+    // empty (before the first create(), or right after clear()); it throws std::logic_error
+    // otherwise, because live objects cannot be moved between storages.
+    // Games that never call it keep the old heap behavior.
+    void usePool(std::size_t capacity);
+    bool usesPool() const { return pool != nullptr; }
+    std::size_t poolCapacity() const { return pool ? pool->capacity() : 0; }
+    std::size_t poolInUse() const { return pool ? pool->size() : 0; }
+    std::size_t poolAvailable() const { return pool ? pool->available() : 0; }
+    std::size_t poolPeakUsage() const { return pool ? pool->peakUsage() : 0; }
+
+    // With a pool, create()/createWithId() throw std::bad_alloc when the pool is full.
+    // A failed create changes nothing: no id is used up and no slot is taken.
     GameObject &create(const std::string &name = "");
     GameObject &createWithId(uint32_t id, const std::string &name = "");
+    // Same as create(), but returns nullptr when the pool is full. Use it for objects the
+    // game can live without (bullets, particles). Never returns nullptr without a pool.
+    GameObject *tryCreate(const std::string &name = "");
 
     void destroy(uint32_t id);
     void flushDestroyed();
@@ -26,7 +63,7 @@ public:
     GameObject *findByName(const std::string &name);
 
     std::size_t size() const { return objects.size(); }
-    const std::vector<std::unique_ptr<GameObject>> &getAll() const { return objects; }
+    const std::vector<GameObjectPtr> &getAll() const { return objects; }
 
     void updateTimeline(int timelineId, float deltaTime);
     void copySnapshot(std::vector<RenderItem> &snapshot) const;
@@ -76,7 +113,10 @@ private:
     void drawItem(const RenderItem &item, SDL_Renderer *renderer, float scaleX, float scaleY,
                   const Camera &camera) const;
 
-    std::vector<std::unique_ptr<GameObject>> objects;
+    // Declared before `objects` on purpose: members are destroyed in reverse order, so
+    // every object goes back to the pool before the pool releases its storage.
+    std::unique_ptr<PoolAllocator<GameObject>> pool;
+    std::vector<GameObjectPtr> objects;
     std::unordered_map<uint32_t, GameObject *> byId;
     std::vector<uint32_t> pendingDestroy;
     uint32_t nextId = 1;

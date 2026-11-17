@@ -4,8 +4,8 @@ Game Engine Construction project at NC State. A shared C++17/SDL3 engine support
 three individual games and the graphics, timing, object-model, and networking
 features developed across Milestones 1–4. Milestone 4 adds queued gameplay events,
 networked interactions, and offline recording/playback through the shared engine.
-Milestone 5 adds a tested custom pool allocator; manager integration and the other
-Milestone 5 features are still pending.
+Milestone 5 adds a tested custom pool allocator and optional pooled storage in
+GameObjectManager; input chords/sequences are still pending.
 
 | Team member | Individual game | Guide |
 | --- | --- | --- |
@@ -344,9 +344,9 @@ that can affect playback.
 ### Milestone 5 — Custom memory allocator (Adit)
 
 The shared [PoolAllocator](Engine/include/PoolAllocator.h) and its
-[automated tests](Tests/PoolAllocatorTest.cpp) are implemented. Integration into
-GameObjectManager, input chords/sequences, and the new individual games remain
-separate work. Existing games still use the manager's heap allocation path.
+[automated tests](Tests/PoolAllocatorTest.cpp) are implemented, and GameObjectManager can now use them (see
+[Pooled GameObjectManager](#milestone-5--pooled-gameobjectmanager-sai) below). Input
+chords/sequences remain separate work. Existing games still use the heap path.
 
 #### Design decisions
 
@@ -418,12 +418,48 @@ compatibility with GameObject and move-only types. Success prints
 `All 9 pool allocator checks passed`. Runtime checks remain active in Release.
 The test does not link SDL or ZeroMQ and needs no game assets or server.
 
-These checks verify the allocator, not pooled manager integration or the complete
-Milestone 5 submission. The new games must use the allocator after integration.
-For CSC581, the milestone also requires two new non-platformer games and an
-individual reflection with code-reuse measurements and screenshot evidence.
+These checks verify the allocator itself. Manager integration has its own tests below.
 
 Background reading: [Kalevski's object-pooling example](https://dev.to/kalevski/tutorial-optimizing-memory-consumption-in-html5-games-lkb).
+
+### Milestone 5 — Pooled GameObjectManager (Sai)
+
+Games opt in to pooled storage before creating any objects. Heap allocation stays
+the default, so Cave Ninja, Lost Under the Sea and Hello Kitty Adventure are unchanged.
+
+```cpp
+GameObjectManager &objects = engine.getObjects();
+objects.usePool(192);                      // capacity chosen by the game designer
+
+GameObject &wall  = objects.create("wall");      // throws std::bad_alloc when full
+GameObject *shot  = objects.tryCreate("bullet"); // nullptr when full; game skips it
+
+objects.poolInUse(); objects.poolCapacity(); objects.poolPeakUsage(); objects.poolAvailable();
+```
+
+| Decision | Reason and tradeoff |
+| --- | --- |
+| Opt-in `usePool(capacity)`, only while the manager is empty | Old games keep heap behaviour; live objects can't move between storages, so a late call throws `std::logic_error`. |
+| Objects built with `pool.create(id, name)` | Same constructor as the heap path, so components and ids work the same. |
+| `create()` keeps returning a reference and throws `std::bad_alloc` when full; new `tryCreate()` returns `nullptr` | Level objects must exist (fail loudly); bullets/particles are optional (skip quietly). A failed create uses no id and no slot. |
+| Owning pointer `std::unique_ptr<GameObject, GameObjectDeleter>`; the deleter calls `pool.destroy()` or `delete` | Every release path (deferred destroy, `clear()`, manager shutdown) returns memory to the right place exactly once. `getAll()` now returns `std::vector<GameObjectPtr>`; all 11 callers only use `->` and compile unchanged. |
+| `pool` member declared before `objects` | Members are destroyed in reverse order, so objects go back to the pool before it frees its block. |
+| Deferred destruction kept (`destroy(id)` then `flushDestroyed()` after the workers finish) | Slots are never reused while worker threads read the frame. |
+| `clear()` keeps the reserved block | Restarting a level reuses the same memory. |
+
+Pooling covers the GameObject itself; its components, name and textures still use
+the heap. Hold object ids across frames, not pointers: ids are never reused within a
+level, slots are. Full design notes: [Design_PooledObjects.md](Docs/Design/Design_PooledObjects.md).
+
+Test the integration (9 checks: heap mode unchanged, pool chosen while empty,
+exhaustion, deferred destruction and slot reuse, clear, duplicate ids, engine systems,
+churn, shutdown):
+
+```sh
+cmake --build build --config Release --target pooled_object_manager_test --parallel 4
+ctest --test-dir build -C Release -R "pool" --output-on-failure
+```
+
 
 Team design documents:
 
@@ -487,7 +523,8 @@ foundations, events/replay, and both Sonar formats:
 ctest --test-dir build -C Release -R 'ashah_.*_test' --output-on-failure
 ```
 
-The current suite registers 19 tests, including `pool_allocator_test`.
+The current suite registers 20 tests, including `pool_allocator_test` and
+`pooled_object_manager_test`.
 `event_manager_test`, `event_chain_test`,
 `engine_events_test`, `replay_test`, and `net_events_test` cover the shared M4
 implementation. `ymherya_rescue_test` checks first-rescue-wins, old/expired falls,
