@@ -4,8 +4,8 @@ Game Engine Construction project at NC State. A shared C++17/SDL3 engine support
 three individual games and the graphics, timing, object-model, and networking
 features developed across Milestones 1–4. Milestone 4 adds queued gameplay events,
 networked interactions, and offline recording/playback through the shared engine.
-Milestone 5 adds a tested custom pool allocator; manager integration and the other
-Milestone 5 features are still pending.
+Milestone 5 adds a tested custom pool allocator and event-based input chords and
+sequences. Pool integration into GameObjectManager and the new games remain pending.
 
 | Team member | Individual game | Guide |
 | --- | --- | --- |
@@ -345,8 +345,8 @@ that can affect playback.
 
 The shared [PoolAllocator](Engine/include/PoolAllocator.h) and its
 [automated tests](Tests/PoolAllocatorTest.cpp) are implemented. Integration into
-GameObjectManager, input chords/sequences, and the new individual games remain
-separate work. Existing games still use the manager's heap allocation path.
+GameObjectManager and the new individual games remain separate work. Existing
+games still use the manager's heap allocation path.
 
 #### Design decisions
 
@@ -425,6 +425,57 @@ individual reflection with code-reuse measurements and screenshot evidence.
 
 Background reading: [Kalevski's object-pooling example](https://dev.to/kalevski/tutorial-optimizing-memory-consumption-in-html5-games-lkb).
 
+### Milestone 5 — Input chords and sequences (Yeva)
+
+[InputChord](Engine/include/InputChord.h) detects combinations and sequences;
+[InputSystem](Engine/src/InputSystem.cpp) raises their named actions through the
+shared EventManager. Games register bindings before the engine loop and implement
+the resulting gameplay behavior in their own Input event handlers.
+
+For example, A moves left, Space jumps, and A + Space can trigger a distinct dash:
+
+```cpp
+InputSystem::registerChord(InputActions::Dash,
+                           {SDL_SCANCODE_A, SDL_SCANCODE_SPACE});
+```
+
+Subscribe to `EventTypes::Input`, read the `InputEvent` payload, and handle its
+`action` when it equals `InputActions::Dash`. Registration alone does not implement
+a dash. Each component key must already perform its own gameplay action.
+
+| Decision | Behavior and tradeoff |
+| --- | --- |
+| Preserve individual actions | Movement and jump events still occur; the game decides how they interact with the chord action. |
+| One event per activation | Holding the combination does not repeat it; release at least one component key before activating again. |
+| Stable registration order | Several activated bindings emit actions in registration order, after ordinary input actions. |
+| First enabled player receives chord events | One activation produces one event rather than one per player. |
+| Track held state during disabled input and playback | A held chord does not fire immediately when live input resumes. |
+| Reuse Input events for replay | Recorded chord actions replay through the same handlers while live input is suppressed. Call `InputSystem::resetChords()` in the game's replay restore callback. |
+
+Optional ordered sequences use `InputSystem::registerSequence(action, keys)`.
+Their timeout is 60 idle polling frames, so its real duration depends on frame
+rate. `removeChord()` removes a named binding, `clearChords()` removes all
+bindings, and `resetChords()` resets detector state while retaining bindings.
+Bindings and detector state are shared by InputSystem; games must manage them
+when changing scenes or restarting.
+
+From the repository root, build and run both chord tests:
+
+```sh
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON
+cmake --build build --config Release --target input_chord_test input_chord_integration_test --parallel 4
+ctest --test-dir build -C Release -R "^input_chord(_integration)?_test$" --output-on-failure
+```
+
+The tests cover individual actions, activation/retrigger, disabled input,
+registration, optional sequences, event delivery, and replay without duplicate
+chord actions. On Windows, follow the runtime DLL instructions above before
+running the integration test.
+
+See the [input chord usage guide](Docs/Design/InputChord.md) for handlers, replay
+setup, design details, and troubleshooting. New games still need to demonstrate
+a distinct gameplay behavior triggered by a chord or sequence.
+
 Team design documents:
 
 - [Object model](Docs/Design/Design_ObjectModel.md)
@@ -487,7 +538,9 @@ foundations, events/replay, and both Sonar formats:
 ctest --test-dir build -C Release -R 'ashah_.*_test' --output-on-failure
 ```
 
-The current suite registers 19 tests, including `pool_allocator_test`.
+List the registered tests with `ctest --test-dir build -C Release -N`.
+`pool_allocator_test` covers the allocator; `input_chord_test` and
+`input_chord_integration_test` cover chord detection and event/replay integration.
 `event_manager_test`, `event_chain_test`,
 `engine_events_test`, `replay_test`, and `net_events_test` cover the shared M4
 implementation. `ymherya_rescue_test` checks first-rescue-wins, old/expired falls,
