@@ -160,6 +160,22 @@ if(BUILD_TESTING)
     target_include_directories(net_events_test PRIVATE Engine/include)
     target_link_libraries(net_events_test PRIVATE engine)
     add_test(NAME net_events_test COMMAND net_events_test)
+
+    # --- Milestone 5: input chords ---
+    # Detector only (no engine objects): compiled with just InputChord.cpp and SDL.
+    add_executable(input_chord_test Tests/InputChordTest.cpp Engine/src/InputChord.cpp)
+    target_include_directories(input_chord_test PRIVATE Engine/include)
+    target_link_libraries(input_chord_test PRIVATE SDL3::SDL3)
+    add_test(NAME input_chord_test COMMAND input_chord_test)
+    # Through InputSystem::poll, EventManager and ReplayController.
+    add_executable(input_chord_integration_test Tests/InputChordIntegrationTest.cpp)
+    target_link_libraries(input_chord_integration_test PRIVATE engine)
+    add_test(NAME input_chord_integration_test COMMAND input_chord_integration_test)
+    set_tests_properties(input_chord_integration_test PROPERTIES
+        ENVIRONMENT "SDL_VIDEODRIVER=dummy;SDL_RENDER_DRIVER=software"
+        TIMEOUT 15
+    )
+
     set_tests_properties(net_events_test PROPERTIES TIMEOUT 60)
     set_tests_properties(engine_events_test PROPERTIES
         ENVIRONMENT "SDL_VIDEODRIVER=dummy;SDL_RENDER_DRIVER=software"

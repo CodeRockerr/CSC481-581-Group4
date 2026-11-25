@@ -21,6 +21,7 @@ add_library(engine STATIC
     src/GamePlaySystems.cpp
     src/EventManager.cpp
     src/ReplayController.cpp
+    src/InputChord.cpp
     src/InputSystem.cpp
     src/GamePlayEvents.cpp
 )
