@@ -443,6 +443,7 @@ objects.poolInUse(); objects.poolCapacity(); objects.poolPeakUsage(); objects.po
 | Objects built with `pool.create(id, name)` | Same constructor as the heap path, so components and ids work the same. |
 | `create()` keeps returning a reference and throws `std::bad_alloc` when full; new `tryCreate()` returns `nullptr` | Level objects must exist (fail loudly); bullets/particles are optional (skip quietly). A failed create uses no id and no slot. |
 | Owning pointer `std::unique_ptr<GameObject, GameObjectDeleter>`; the deleter calls `pool.destroy()` or `delete` | Every release path (deferred destroy, `clear()`, manager shutdown) returns memory to the right place exactly once. `getAll()` now returns `std::vector<GameObjectPtr>`; all 11 callers only use `->` and compile unchanged. |
+| Copy and move disabled; default constructor kept | A defaulted move assignment would replace `pool` (freeing the old block) before the old objects are released, so their deleters would use freed memory. Nothing moves a manager, so moving is forbidden and guarded by `static_assert`s. |
 | `pool` member declared before `objects` | Members are destroyed in reverse order, so objects go back to the pool before it frees its block. |
 | Deferred destruction kept (`destroy(id)` then `flushDestroyed()` after the workers finish) | Slots are never reused while worker threads read the frame. |
 | `clear()` keeps the reserved block | Restarting a level reuses the same memory. |
@@ -451,9 +452,9 @@ Pooling covers the GameObject itself; its components, name and textures still us
 the heap. Hold object ids across frames, not pointers: ids are never reused within a
 level, slots are. Full design notes: [Design_PooledObjects.md](Docs/Design/Design_PooledObjects.md).
 
-Test the integration (9 checks: heap mode unchanged, pool chosen while empty,
+Test the integration (10 checks: heap mode unchanged, pool chosen while empty,
 exhaustion, deferred destruction and slot reuse, clear, duplicate ids, engine systems,
-churn, shutdown):
+churn, shutdown, no copy/move):
 
 ```sh
 cmake --build build --config Release --target pooled_object_manager_test --parallel 4

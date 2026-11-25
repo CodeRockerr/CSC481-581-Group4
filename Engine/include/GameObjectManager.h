@@ -33,6 +33,18 @@ using GameObjectPtr = std::unique_ptr<GameObject, GameObjectDeleter>;
 class GameObjectManager
 {
 public:
+    GameObjectManager() = default;
+
+    // Not copyable or movable. With pooled storage a defaulted move assignment would be
+    // unsafe: members are assigned in declaration order, so `pool` would be replaced (and the
+    // old block freed) before this manager's old objects are released, and their deleters
+    // would return memory to a pool that no longer exists. Engine owns exactly one manager
+    // and nothing moves it, so moving is disabled rather than hand-written.
+    GameObjectManager(const GameObjectManager &) = delete;
+    GameObjectManager &operator=(const GameObjectManager &) = delete;
+    GameObjectManager(GameObjectManager &&) = delete;
+    GameObjectManager &operator=(GameObjectManager &&) = delete;
+
     // ---- Pooled storage (Milestone 5) ----
     // Opt in: reserve storage for `capacity` GameObjects up front. Every object created
     // afterwards lives in that block instead of the heap. Call it while the manager is

@@ -35,6 +35,7 @@ is taken.
 | Decision | Why | Cost |
 | --- | --- | --- |
 | Ownership through `std::unique_ptr<GameObject, GameObjectDeleter>`; the deleter holds the pool pointer (null for heap objects) | Each pointer knows where its object came from, so `objects.erase(...)`, `clear()` and the manager's destructor all return memory to the right place. No other manager code had to change. | `getAll()` now returns `std::vector<GameObjectPtr>`. Nothing in the repo used the old exact type. |
+| Copy and move disabled (`= delete`), default constructor kept | A defaulted move assignment assigns `pool` first, freeing the old block before the old objects are released, so their deleters would touch freed memory (found in review of PR #32). Engine owns one manager and never moves it, so forbidding moves is safer than a hand-written move. | A manager can't be stored in a container by value or returned by value. Nothing needs that today. |
 | `pool` declared before `objects` | Members are destroyed in reverse order, so every live object goes back to its slot before the pool frees its block. | Order-dependent; there is a comment in the header so nobody reorders it. |
 | Opt-in, chosen while the manager is empty | Old games keep working; a game decides its own capacity. | A game must set the pool before building its level. |
 | Destruction stays deferred (`destroy()` then `flushDestroyed()` at the end of the frame) | Slots are reused only after the worker threads have finished the frame, so a worker never sees a slot change under it. | A destroyed object holds its slot until the end of the frame. |
@@ -53,7 +54,7 @@ across frames.
 
 ## Tests
 
-`Tests/PooledObjectManagerTest.cpp` (`pooled_object_manager_test`), 9 checks:
+`Tests/PooledObjectManagerTest.cpp` (`pooled_object_manager_test`), 10 checks:
 
 1. Heap mode is unchanged (500 objects, no cap).
 2. The pool must be chosen while the manager is empty; capacity 0 is rejected.
@@ -64,6 +65,8 @@ across frames.
 7. Engine systems (`forEach`, `updateTimeline`, snapshots) see pooled objects.
 8. Heavy create/destroy churn stays within capacity and leaks no components.
 9. Destroying the manager releases every live object.
+10. The manager can't be copied or moved, and its default constructor still works in both modes
+    (`static_assert`s make re-enabling a move a build error).
 
 ## Regression check
 

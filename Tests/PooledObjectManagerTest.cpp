@@ -8,7 +8,16 @@
 #include <iostream>
 #include <new>
 #include <stdexcept>
+#include <type_traits>
 #include <vector>
+
+// Regression guard (PR #32 review): a defaulted move assignment would free the destination's
+// pool before releasing its old objects. Re-enabling copy or move must fail the build.
+static_assert(std::is_default_constructible_v<GameObjectManager>, "GameObjectManager keeps its default constructor");
+static_assert(!std::is_move_constructible_v<GameObjectManager>, "GameObjectManager must not be movable");
+static_assert(!std::is_move_assignable_v<GameObjectManager>, "GameObjectManager must not be move-assignable");
+static_assert(!std::is_copy_constructible_v<GameObjectManager>, "GameObjectManager must not be copyable");
+static_assert(!std::is_copy_assignable_v<GameObjectManager>, "GameObjectManager must not be copy-assignable");
 
 namespace
 {
@@ -293,6 +302,21 @@ namespace
         }
         require(Tracked::alive == 0, "Destroying the manager destroys its pooled objects");
     }
+
+    // The static_asserts above are the real guard; this runs the default constructor in both
+    // modes so removing the implicit one by accident is also caught at run time.
+    void notMovableButDefaultConstructible()
+    {
+        GameObjectManager heap;
+        heap.create("heap").add<Tracked>();
+        GameObjectManager pooled;
+        pooled.usePool(2);
+        pooled.create("pooled").add<Tracked>();
+        require(Tracked::alive == 2 && pooled.poolInUse() == 1, "Default-constructed managers work in both modes");
+        pooled.clear();
+        heap.clear();
+        require(Tracked::alive == 0 && pooled.poolInUse() == 0, "Both managers release their objects");
+    }
 }
 
 int main()
@@ -312,6 +336,7 @@ int main()
         {"systems see pooled objects", systemsSeePooledObjects},
         {"churn stays within capacity", churnStaysWithinCapacity},
         {"manager destruction releases live objects", managerDestructionReleasesLiveObjects},
+        {"manager is not copyable or movable", notMovableButDefaultConstructible},
     };
 
     int passed = 0;
