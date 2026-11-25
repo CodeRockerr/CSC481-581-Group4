@@ -136,6 +136,10 @@ target_link_libraries(gameplay_systems_test PRIVATE
 
 
 if(BUILD_TESTING)
+    add_executable(pool_allocator_test Tests/PoolAllocatorTest.cpp)
+    target_include_directories(pool_allocator_test PRIVATE Engine/include)
+    add_test(NAME pool_allocator_test COMMAND pool_allocator_test)
+    set_tests_properties(pool_allocator_test PROPERTIES TIMEOUT 10)
     add_executable(event_manager_test Tests/EventManagerTest.cpp)
     target_link_libraries(event_manager_test PRIVATE engine)
     add_test(NAME event_manager_test COMMAND event_manager_test)

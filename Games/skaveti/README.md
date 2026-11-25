@@ -54,8 +54,8 @@ What it shows:
 - Clients at 0.5x, 1x and 2x run their loops at about 30, 60 and 120 Hz and still see the platform in the same place
 - The ninja rides the moving platform
 
-## Milestone 3 (current version on `main`)
-Milestone 3 moves Cave Ninja onto the component-based object model, the shared gameplay systems and the new object networking. It is on `main` (merged in PR #16) and will be tagged `milestone-3` after the deadline.
+## Milestone 3
+Milestone 3 moves Cave Ninja onto the component-based object model, the shared gameplay systems and the new object networking. It was merged in PR #16.
 
 Requirements: CMake, a C++17 compiler, and internet access on the first build (CMake downloads libzmq 4.3.5). SDL3 is vendored, no install needed.
 
@@ -96,11 +96,44 @@ What it shows:
 Milestone 3 keys (in addition to the controls below):
 - H: show / hide hidden objects (green spawn points, red death zones, blue scroll boundaries)
 
+## Milestone 4 (current version on `main`)
+Cave Ninja now runs on events: input, collision, death and spawn each have a handler. Death is shared across the network, and replay works offline. Merged in PR #29.
+
+Build and run the same way as Milestone 3, from the repository root.
+
+Offline (replay works here):
+
+    ./build/Release/skaveti_game
+
+Client-server (start the server, then two clients, each in its own terminal; the last word picks the wire format, `binary` or `text`):
+
+    ./build/Release/skaveti_server 5555
+    ./build/Release/skaveti_game --client 127.0.0.1 5555 binary
+    ./build/Release/skaveti_game --client 127.0.0.1 5555 text
+
+Milestone 4 keys:
+- R: start recording
+- T: stop recording
+- Y: play back the recording (offline only)
+The title bar shows REC, REPLAY or live.
+
+What it shows:
+- Four gameplay events (input, collision, death, spawn), each with its own handler
+- A shared Death event: when one client dies, the other client's replica of that ninja flashes red and its "remote deaths" counter rises
+- Offline replay through the engine's ReplayController
+
+Tests:
+
+    ctest --test-dir build -C Release --output-on-failure
+
+Design notes: `Docs/Design/Design_NetEvents.md`.
+
 ## Controls
 - Move: A/D or Left/Right
 - Jump: W, Up or Space
 - Toggle scaling (pixel vs percentage): Tab
 - Touching the shadow wisp or falling into a pit respawns the player (at the last checkpoint from Milestone 3 on)
+- R / T / Y: record, stop and play back a replay (offline only)
 
 Milestone 2 time controls (only the local ninja changes):
 - P: pause / unpause

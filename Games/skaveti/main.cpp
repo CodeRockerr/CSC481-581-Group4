@@ -2,15 +2,19 @@
 #include "Components.h"
 #include "DeathZone.h"
 #include "Engine.h"
+#include "Event.h"
 #include "GamePlaySystems.h"
 #include "Image.h"
 #include "MovementPath.h"
+#include "EventObjects.h"
+#include "NetEventBridge.h"
 #include "NetworkClient.h"
 #include "NetworkIdentity.h"
 #include "PeerSession.h"
 #include "SpawnPoint.h"
 
 #include <algorithm>
+#include <any>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
@@ -19,7 +23,9 @@
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
+#include <variant>
 #include <vector>
 
 namespace
@@ -128,7 +134,7 @@ int main(int argc, char *argv[])
     }
     const uint32_t localOwner = net ? net->getClientId() : (peers ? peers->getOwnerId() : 0u);
 
-    Engine engine("Cave Ninja - Milestone 3", 1280, 720);
+    Engine engine("Cave Ninja - Milestone 4", 1280, 720);
     GameObjectManager &objects = engine.getObjects();
     Camera &camera = engine.getCamera();
     SDL_Renderer *renderer = engine.getRenderer().getHandle();
@@ -234,7 +240,10 @@ int main(int argc, char *argv[])
     player.add<PlayerInput>(moveSpeed, jumpSpeed);
     if (net || peers)
     {
-        player.add<NetworkIdentity>(localOwner, Cave::KindNinja);
+        // A nonzero netId is required before shared events can name this ninja
+        // (EventObjects::of treats netId 0 as an offline object). The object id is what the
+        // snapshots already use as the netId, so nothing changes on the wire.
+        player.add<NetworkIdentity>(localOwner, Cave::KindNinja, player.getId());
     }
     const uint32_t playerId = player.getId();
 
@@ -299,7 +308,6 @@ int main(int argc, char *argv[])
         grounded = false;
         ridingId = 0;
         lastFeetY = t->y + t->height;
-        ++deaths;
         snapCameraToPlayer();
     };
 
@@ -317,6 +325,203 @@ int main(int argc, char *argv[])
         body->velocityY = 0.0f;
         afterRespawn();
     };
+
+
+    // ------------------------------------------------------------------------------------
+    // Milestone 4: gameplay is driven by events (see Docs/Design/Design_Events.md).
+    //   keys           -> Input events      -> movement intent (moveAxis / jumpQueued)
+    //   overlap checks -> Collision events  -> hazard, wisp, checkpoint responses
+    //   Collision      -> Death event       -> life count, then raises a Spawn event
+    //   Death          -> Spawn event       -> respawn at the checkpoint
+    //   Death (shareable) crosses the network; the other client sees the ninja flash red.
+    // ------------------------------------------------------------------------------------
+    EventManager &events = engine.getEvents();
+    ReplayController &replay = engine.getReplay();
+    std::unique_ptr<NetEventBridge> bridge;
+    if (net)
+        bridge = std::make_unique<NetEventBridge>(events, *net); // after connect(): sets the owner id
+
+    constexpr EventTime InvulnerableMicros = 150'000; // one death per hit, not one per overlapping hazard
+    constexpr int64_t FlashNanos = 1'200'000'000;
+    float moveAxis = 0.0f;
+    bool jumpQueued = false;
+    EventTime invulnerableUntil = 0;
+    int remoteDeaths = 0;
+    std::unordered_set<uint32_t> touching; // hazards/triggers overlapped last frame (edge detection)
+    std::unordered_map<uint32_t, int64_t> flashUntil; // replica object id -> global time (ns)
+
+    auto raiseDeath = [&](const std::string &reason)
+    {
+        Event death;
+        death.type = EventTypes::Death;
+        death.priority = EventPriority::High;
+        death.shareable = true; // the only gameplay event shared over the network
+        // The source stays empty: the cause is a local hazard or the wisp, which other machines
+        // cannot resolve, and an offline reference would keep the whole event local.
+        // The target names the ninja by (client id, netId), which every client can resolve.
+        if (GameObject *ninja = objects.find(playerId))
+            death.target = EventObjects::of(*ninja);
+        death.payload = DeathEvent{reason};
+        events.raise(death);
+    };
+
+    events.subscribe(EventTypes::Input, [&](const Event &e)
+                     {
+        const InputEvent *in = std::get_if<InputEvent>(&e.payload);
+        if (in == nullptr)
+            return;
+        if (in->action == "move")
+            moveAxis = in->value;
+        else if (in->action == "jump" && in->value > 0.0f)
+            jumpQueued = true; });
+
+    events.subscribe(EventTypes::Collision, [&](const Event &e)
+                     {
+        if (e.origin == EventOrigin::Network)
+            return;
+        GameObject *other = objects.find(e.target.netId);
+        if (other == nullptr)
+            return;
+        if (other->has<SpawnPoint>())
+        {
+            const SpawnPoint *point = other->get<SpawnPoint>();
+            for (int i = checkpoint + 1; i < Cave::SpawnPointCount; ++i)
+                if (point->name == Cave::SpawnPoints[i].name)
+                    setCheckpoint(i);
+            return;
+        }
+        if (events.now() < invulnerableUntil)
+            return;
+        if (other->has<DeathZone>())
+            raiseDeath("hazard");
+        else if (other->has<Cave::Patrol>())
+            raiseDeath("shadow wisp"); });
+
+    events.subscribe(EventTypes::Death, [&](const Event &e)
+                     {
+        const DeathEvent *d = std::get_if<DeathEvent>(&e.payload);
+        const std::string reason = d != nullptr ? d->reason : "unknown";
+        if (e.origin == EventOrigin::Network)
+        {
+            // Another player died: flash their replica red and count it.
+            ++remoteDeaths;
+            objects.forEach<NetworkIdentity>([&](GameObject &g, NetworkIdentity &id)
+                                             {
+                if (id.isReplica && id.kind == Cave::KindNinja && id.ownerId == e.target.ownerId)
+                    flashUntil[g.getId()] = globalTime.getTime() + FlashNanos; });
+            SDL_Log("Player %u died (%s)", e.target.ownerId, reason.c_str());
+            return;
+        }
+        ++deaths;
+        invulnerableUntil = events.now() + InvulnerableMicros;
+        SDL_Log("The ninja died (%s)", reason.c_str());
+        Event spawn;
+        spawn.type = EventTypes::Spawn;
+        spawn.target = {0, playerId};
+        spawn.payload = SpawnEvent{Cave::SpawnPoints[checkpoint].name};
+        events.raise(spawn); });
+
+    events.subscribe(EventTypes::Spawn, [&](const Event &e)
+                     {
+        const SpawnEvent *s = std::get_if<SpawnEvent>(&e.payload);
+        if (s != nullptr && e.origin != EventOrigin::Network)
+            respawnAt(s->spawnPoint); });
+
+    // Replay (offline only): record input + timing, then regenerate the rest on playback.
+    struct PathState
+    {
+        float x, y, elapsed, startX, startY, centerX, centerY;
+        bool initialized;
+    };
+    struct ReplayState
+    {
+        float x, y, vx, vy, lastFeetY, walkTimer, moveAxis, camX, camY;
+        bool grounded, jumpQueued, flip;
+        int frame, runIndex, checkpoint, deaths;
+        uint32_t ridingId;
+        EventTime invulnerableUntil;
+        std::unordered_map<uint32_t, PathState> paths;
+        std::unordered_map<uint32_t, SDL_FPoint> groundPos;
+        std::unordered_set<uint32_t> touching;
+    };
+    if (!net && !peers)
+    {
+        replay.setStateCallbacks(
+            [&]() -> std::any
+            {
+                ReplayState st{};
+                GameObject *ninja = objects.find(playerId);
+                const Transform *t = ninja->get<Transform>();
+                const PhysicsBody *b = ninja->get<PhysicsBody>();
+                const Sprite *sp = ninja->get<Sprite>();
+                st.x = t->x;
+                st.y = t->y;
+                st.vx = b->velocityX;
+                st.vy = b->velocityY;
+                st.flip = sp->flipHorizontal;
+                st.frame = sp->frame;
+                st.lastFeetY = lastFeetY;
+                st.walkTimer = walkTimer;
+                st.moveAxis = moveAxis;
+                st.camX = camera.getX();
+                st.camY = camera.getY();
+                st.grounded = grounded;
+                st.jumpQueued = jumpQueued;
+                st.runIndex = runIndex;
+                st.checkpoint = checkpoint;
+                st.deaths = deaths;
+                st.ridingId = ridingId;
+                st.invulnerableUntil = invulnerableUntil;
+                st.groundPos = lastGroundPos;
+                st.touching = touching;
+                objects.forEach<MovementPath, Transform>([&](GameObject &g, MovementPath &m, Transform &pt)
+                                                         { st.paths[g.getId()] = {pt.x, pt.y, m.elapsedTime, m.startX, m.startY,
+                                                                                  m.centerX, m.centerY, m.initialized}; });
+                return st;
+            },
+            [&](const std::any &state)
+            {
+                const ReplayState &st = std::any_cast<const ReplayState &>(state);
+                GameObject *ninja = objects.find(playerId);
+                Transform *t = ninja->get<Transform>();
+                PhysicsBody *b = ninja->get<PhysicsBody>();
+                Sprite *sp = ninja->get<Sprite>();
+                t->x = st.x;
+                t->y = st.y;
+                b->velocityX = st.vx;
+                b->velocityY = st.vy;
+                sp->flipHorizontal = st.flip;
+                sp->frame = st.frame;
+                lastFeetY = st.lastFeetY;
+                walkTimer = st.walkTimer;
+                moveAxis = st.moveAxis;
+                grounded = st.grounded;
+                jumpQueued = st.jumpQueued;
+                runIndex = st.runIndex;
+                checkpoint = st.checkpoint;
+                deaths = st.deaths;
+                ridingId = st.ridingId;
+                invulnerableUntil = st.invulnerableUntil;
+                lastGroundPos = st.groundPos;
+                touching = st.touching;
+                objects.forEach<MovementPath, Transform>([&](GameObject &g, MovementPath &m, Transform &pt)
+                                                         {
+                    auto found = st.paths.find(g.getId());
+                    if (found == st.paths.end())
+                        return;
+                    pt.x = found->second.x;
+                    pt.y = found->second.y;
+                    m.elapsedTime = found->second.elapsed;
+                    m.startX = found->second.startX;
+                    m.startY = found->second.startY;
+                    m.centerX = found->second.centerX;
+                    m.centerY = found->second.centerY;
+                    m.initialized = found->second.initialized; });
+                setCheckpoint(checkpoint);
+                camera.setPosition(st.camX, st.camY);
+                pinBoundaries();
+            });
+    }
 
     auto toggleHiddenDebug = [&]()
     {
@@ -347,10 +552,22 @@ int main(int argc, char *argv[])
             const float playerDelta = static_cast<float>(playerTime.getLastDelta());
             camera.setViewport(Cave::ViewWidth, Cave::ViewHeight);
 
-            if (net)
+            // During local replay the recorded run owns the world, so live snapshots are not applied.
+            if (net && !events.isPlaybackMode())
                 net->sync(objects, onSpawn);
-            if (peers)
+            if (peers && !events.isPlaybackMode())
                 peers->sync(objects, onSpawn);
+            if (bridge)
+                bridge->pump(); // network -> EventManager (handled in this frame's dispatch)
+
+            // Flash the replica of a player who just died on another client.
+            objects.forEach<NetworkIdentity, Sprite>([&](GameObject &g, NetworkIdentity &id, Sprite &sp)
+                                                     {
+                if (!id.isReplica || id.kind != Cave::KindNinja)
+                    return;
+                auto flash = flashUntil.find(g.getId());
+                const bool flashing = flash != flashUntil.end() && globalTime.getTime() < flash->second;
+                sp.color = flashing ? SDL_Color{255, 60, 60, 255} : SDL_Color{200, 200, 255, 230}; });
 
             if (!net)
             {
@@ -403,6 +620,39 @@ int main(int argc, char *argv[])
             PhysicsBody &body = *ninja.get<PhysicsBody>();
             Sprite &sprite = *ninja.get<Sprite>();
             const PlayerInput &input = *ninja.get<PlayerInput>();
+
+            // Input producer: keys become Input events. EventManager drops live Input events
+            // while a replay plays, so recorded input is the only input then.
+            {
+                Event move;
+                move.type = EventTypes::Input;
+                move.target = {0, playerId};
+                move.payload = InputEvent{"move", input.horizontalAxis()};
+                events.raise(move);
+                if (input.jumpJustPressed())
+                {
+                    Event jump;
+                    jump.type = EventTypes::Input;
+                    jump.target = {0, playerId};
+                    jump.payload = InputEvent{"jump", 1.0f};
+                    events.raise(jump);
+                }
+            }
+            if (!net && !peers)
+            {
+                // R: start recording, T: stop, Y: play back (replay controls are events too).
+                for (const auto &[key, type] : {std::pair<SDL_Scancode, EventType>{SDL_SCANCODE_R, EventTypes::ReplayStart},
+                                                {SDL_SCANCODE_T, EventTypes::ReplayStop},
+                                                {SDL_SCANCODE_Y, EventTypes::ReplayPlayback}})
+                {
+                    if (Input::isKeyJustPressed(key))
+                    {
+                        Event control;
+                        control.type = type;
+                        events.raise(control);
+                    }
+                }
+            }
             {
                 std::lock_guard<std::mutex> lock(ninja.getMutex());
                 const bool paused = playerTime.isPaused();
@@ -414,19 +664,20 @@ int main(int argc, char *argv[])
                     t.y += d.y;
                 }
 
-                const float axis = input.horizontalAxis();
+                const float axis = moveAxis;
                 body.velocityX = axis * input.moveSpeed;
                 if (axis < 0.0f)
                     sprite.flipHorizontal = true;
                 else if (axis > 0.0f)
                     sprite.flipHorizontal = false;
 
-                if (input.jumpJustPressed() && grounded && !paused)
+                if (jumpQueued && grounded && !paused)
                 {
                     body.velocityY = -input.jumpSpeed;
                     grounded = false;
                     ridingId = 0;
                 }
+                jumpQueued = false;
 
                 const SDL_FRect feet{t.x + t.width * 0.25f, t.y, t.width * 0.5f, t.height};
                 bool landed = false;
@@ -486,35 +737,38 @@ int main(int argc, char *argv[])
                 lastFeetY = t.y + t.height;
             }
 
-            for (int i = 0; i < Cave::SpawnPointCount; ++i)
+            // Collision producer: new overlaps (edge-triggered) become Collision events.
+            // The handlers above decide what each contact means.
             {
-                if (t.x >= Cave::SpawnPoints[i].x && i > checkpoint)
-                    setCheckpoint(i);
-            }
-
-            std::vector<bool> wasArmed;
-            objects.forEach<DeathZone>([&](GameObject &, DeathZone &dz)
-                                       { wasArmed.push_back(dz.armed); });
-            GameplaySystems::updateDeathZones(objects, playerId);
-            bool died = false;
-            std::size_t zoneIndex = 0;
-            objects.forEach<DeathZone>([&](GameObject &, DeathZone &dz)
-                                       {
-                if (zoneIndex < wasArmed.size() && wasArmed[zoneIndex] && !dz.armed)
-                    died = true;
-                ++zoneIndex; });
-            if (died)
-            {
-                afterRespawn();
-            }
-            else if (GameObject *w = objects.find(wispId); w && w->active && overlaps(colliderBounds(ninja), colliderBounds(*w)))
-            {
-                SDL_Log("The ninja was killed by the shadow wisp!");
-                respawnAt(Cave::SpawnPoints[checkpoint].name);
-            }
-            else if (t.y > Cave::WorldHeight + 200.0f)
-            {
-                respawnAt(Cave::SpawnPoints[checkpoint].name);
+                std::unordered_set<uint32_t> overlapping;
+                auto contact = [&](GameObject &other, bool trigger)
+                {
+                    overlapping.insert(other.getId());
+                    if (touching.count(other.getId()) != 0)
+                        return;
+                    Event hit;
+                    hit.type = EventTypes::Collision;
+                    hit.source = {0, playerId};
+                    hit.target = {0, other.getId()};
+                    hit.payload = CollisionEvent{0.0f, -1.0f, trigger};
+                    events.raise(hit);
+                };
+                const SDL_FRect body = colliderBounds(ninja);
+                objects.forEach<DeathZone, Collider>([&](GameObject &zone, DeathZone &, Collider &)
+                                                     {
+                    if (overlaps(body, colliderBounds(zone)))
+                        contact(zone, true); });
+                if (GameObject *w = objects.find(wispId); w && w->active && overlaps(body, colliderBounds(*w)))
+                    contact(*w, false);
+                for (int i = checkpoint + 1; i < Cave::SpawnPointCount; ++i)
+                {
+                    if (t.x >= Cave::SpawnPoints[i].x)
+                        if (GameObject *point = GameplaySystems::findSpawnPointByName(objects, Cave::SpawnPoints[i].name))
+                            contact(*point, true);
+                }
+                touching = std::move(overlapping);
+                if (t.y > Cave::WorldHeight + 200.0f && events.now() >= invulnerableUntil)
+                    raiseDeath("fell");
             }
 
             {
@@ -528,9 +782,10 @@ int main(int argc, char *argv[])
                 pinBoundaries();
             }
 
-            if (net)
+            // ...and the replayed state is never published to other players.
+            if (net && !events.isPlaybackMode())
                 net->publish(objects);
-            if (peers)
+            if (peers && !events.isPlaybackMode())
                 peers->publish(objects);
 
             ++framesSinceTitle;
@@ -549,9 +804,10 @@ int main(int argc, char *argv[])
                 const char *mode = net ? "client" : (peers ? "peer" : "offline");
                 char title[256];
                 std::snprintf(title, sizeof(title),
-                              "Cave Ninja M3 | %s %u (%s) | ninjas %zu | checkpoint %s | deaths %d | loop %.0f Hz | rtt %.1f ms | %s x%.1f",
+                              "Cave Ninja M4 | %s %u (%s) | ninjas %zu | checkpoint %s | deaths %d | remote deaths %d | %s | loop %.0f Hz | rtt %.1f ms | %s x%.1f",
                               mode, localOwner, NetProtocol::formatName(options.format), ninjas,
-                              Cave::SpawnPoints[checkpoint].name, deaths, loopHz,
+                              Cave::SpawnPoints[checkpoint].name, deaths, remoteDeaths,
+                              replay.isRecording() ? "REC" : (replay.isPlaying() ? "REPLAY" : "live"), loopHz,
                               net ? static_cast<double>(net->getLastRoundTripMicros()) / 1000.0 : 0.0,
                               playerTime.isPaused() ? "PAUSED" : "running", playerTime.getScale());
                 SDL_SetWindowTitle(engine.getWindow().getHandle(), title);

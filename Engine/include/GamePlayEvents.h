@@ -1,13 +1,5 @@
 #pragma once
-// Gameplay event producers + common handlers (Milestone 4, Yeva's part).
-//
-//   InputSystem::poll      -> Input event     -> PlayerIntent
-//   produceCollisions      -> Collision event -> (death zone / scroll trigger / game rule)
-//   death zone, hazards,
-//   produceOutOfBounds     -> Death event     -> Rules::onDeath (game rules) -> Spawn event
-//   Spawn event            -> position + velocity reset -> Rules::onSpawned
-//
-// Producers only call EventManager::raise(). Handlers run on the main thread inside dispatch().
+
 #include "Camera.h"
 #include "Event.h"
 #include "EventManager.h"
