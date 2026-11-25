@@ -6,9 +6,31 @@
 #include <stdexcept>
 #include <string>
 
+void GameObjectManager::usePool(std::size_t capacity)
+{
+    if (!objects.empty())
+    {
+        throw std::logic_error("GameObjectManager::usePool needs an empty manager");
+    }
+
+    pool = std::make_unique<PoolAllocator<GameObject>>(capacity);
+}
+
 GameObject &GameObjectManager::create(const std::string &name)
 {
-    return createWithId(nextId++, name);
+    // createWithId advances nextId only after the object exists, so a full pool
+    // does not burn an id.
+    return createWithId(nextId, name);
+}
+
+GameObject *GameObjectManager::tryCreate(const std::string &name)
+{
+    if (pool && pool->available() == 0)
+    {
+        return nullptr;
+    }
+
+    return &create(name);
 }
 
 GameObject &GameObjectManager::createWithId(uint32_t id, const std::string &name)
@@ -23,15 +45,29 @@ GameObject &GameObjectManager::createWithId(uint32_t id, const std::string &name
         throw std::invalid_argument("GameObject id " + std::to_string(id) + " already exists");
     }
 
+    GameObjectPtr object(pool ? pool->create(id, name) : new GameObject(id, name),
+                         GameObjectDeleter{pool.get()});
+    if (!object)
+    {
+        throw std::bad_alloc();
+    }
+
+    GameObject &result = *object;
+    objects.push_back(std::move(object));
+    try
+    {
+        byId[id] = &result;
+    }
+    catch (...)
+    {
+        objects.pop_back();
+        throw;
+    }
+
     if (id >= nextId)
     {
         nextId = id + 1;
     }
-
-    auto object = std::make_unique<GameObject>(id, name);
-    GameObject &result = *object;
-    byId[id] = &result;
-    objects.push_back(std::move(object));
     return result;
 }
 
@@ -80,6 +116,8 @@ void GameObjectManager::flushDestroyed()
 
 void GameObjectManager::clear()
 {
+    // Pooled objects go back to their slots here; the reserved block itself is kept,
+    // so a restarted level reuses the same memory.
     pendingDestroy.clear();
     byId.clear();
     objects.clear();
