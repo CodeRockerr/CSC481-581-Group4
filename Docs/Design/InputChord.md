@@ -104,7 +104,7 @@ chords and subscribes its handler.
 From the repository root:
 
 ```
-cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON
 cmake --build build --config Release --parallel 4
 ctest --test-dir build -C Release -R "input_chord" --output-on-failure
 ```
@@ -115,11 +115,15 @@ That should show 2 of 2 passed (`input_chord_test`, `input_chord_integration_tes
 ctest --test-dir build -C Release --output-on-failure
 ```
 
-On Windows, if a test will not start with error `0xc0000135`, copy the zmq DLL next to the executables:
+On Windows, if a test will not start with error `0xc0000135`, copy the ZeroMQ DLL
+next to the executables. From PowerShell at the repository root:
 
+```powershell
+Copy-Item .\build\_deps\libzmq-build\bin\Release\libzmq*.dll .\build\Release\ -Force
 ```
-cp build/_deps/libzmq-build/bin/Release/libzmq-v145-mt-4_3_5.dll build/Release/
-```
+
+For Debug, build with `--config Debug`, use `bin\Debug` and `build\Debug` in the
+copy command, and run CTest with `-C Debug`. Use your actual build-directory name.
 
 What the tests cover:
 
